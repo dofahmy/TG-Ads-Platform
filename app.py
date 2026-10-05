@@ -148,6 +148,20 @@ client = DemoAds() if DEMO else TelegramAds(TOKEN)
 
 
 # ---------------------------------------------------------------- التخزين
+def prepare_db_path():
+    """يتأكد أن مجلد قاعدة البيانات موجود وقابل للكتابة، وإلا يرجع لمجلد البرنامج."""
+    global DB_PATH
+    folder = os.path.dirname(DB_PATH) or "."
+    try:
+        os.makedirs(folder, exist_ok=True)
+        sqlite3.connect(DB_PATH, timeout=30).close()
+    except (OSError, sqlite3.Error) as e:
+        fallback = os.path.join(HERE, os.path.basename(DB_PATH))
+        print(f"تحذير: تعذر استخدام {DB_PATH} ({e}). سيتم التخزين مؤقتًا في {fallback} "
+              "والبيانات ستُمسح مع كل نشر. راجعي ربط مساحة التخزين.", flush=True)
+        DB_PATH = fallback
+
+
 def db():
     con = sqlite3.connect(DB_PATH, timeout=30)
     con.row_factory = sqlite3.Row
@@ -321,8 +335,8 @@ def guard():
     if not DASH_PASSWORD:
         return None
     auth = request.authorization
-    if auth and hmac.compare_digest(auth.username or "", DASH_USER) and \
-            hmac.compare_digest(auth.password or "", DASH_PASSWORD):
+    same = lambda a, b: hmac.compare_digest((a or "").encode("utf-8"), b.encode("utf-8"))
+    if auth and same(auth.username, DASH_USER) and same(auth.password, DASH_PASSWORD):
         return None
     return Response("مطلوب تسجيل الدخول", 401, {"WWW-Authenticate": 'Basic realm="ads"'})
 
@@ -416,6 +430,7 @@ def sync_now():
 
 
 if __name__ == "__main__":
+    prepare_db_path()
     init_db()
     threading.Thread(target=sync_loop, daemon=True).start()
     if DEMO:
