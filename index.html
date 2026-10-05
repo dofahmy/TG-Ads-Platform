@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>إعلانات تيليجرام ساعة بساعة</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{
+  --paper:#F3F6F5; --surface:#FFFFFF; --ink:#12222B; --muted:#5E6F78; --line:#D9E1E0;
+  --petrol:#0B5563; --petrol-soft:#E3EEF0;
+  --good:#14784F; --good-bg:#DDF1E6; --mid:#C98A12; --mid-bg:#F7EBCF; --bad:#B3362B; --bad-bg:#F8E1DD;
+  --empty:#E6ECEB;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 15px/1.6 "IBM Plex Sans Arabic",Tahoma,sans-serif}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--petrol);outline-offset:2px}
+.wrap{max-width:1320px;margin:0 auto;padding:0 20px 60px}
+.num{font-variant-numeric:tabular-nums;direction:ltr;unicode-bidi:isolate;white-space:nowrap}
+
+header.top{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:22px 0 14px}
+header.top h1{margin:0;font-size:24px;font-weight:700;letter-spacing:0}
+.sync{margin-inline-start:auto;display:flex;align-items:center;gap:12px;color:var(--muted);font-size:13.5px}
+.btn{border:1px solid var(--petrol);background:var(--petrol);color:#fff;border-radius:6px;padding:6px 14px;cursor:pointer;font-weight:500}
+.btn.ghost{background:transparent;color:var(--petrol)}
+.btn:disabled{opacity:.55;cursor:default}
+.notice{border-radius:6px;padding:9px 14px;margin-bottom:12px;font-size:14px}
+.notice.demo{background:var(--mid-bg);color:#6A4A05}
+.notice.err{background:var(--bad-bg);color:var(--bad)}
+
+.tools{display:flex;flex-wrap:wrap;gap:12px 18px;align-items:end;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.field{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+.field input,.field select{border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:#fff;color:var(--ink);min-width:0}
+.field input[type=number]{width:120px}
+.field input[type=search]{width:200px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#fff}
+.seg button{border:0;background:transparent;padding:6px 13px;cursor:pointer;border-inline-start:1px solid var(--line)}
+.seg button:first-child{border-inline-start:0}
+.seg button[aria-pressed=true]{background:var(--petrol);color:#fff}
+
+.sum{display:flex;flex-wrap:wrap;gap:8px 30px;margin:16px 2px 10px;color:var(--muted);font-size:14px}
+.sum b{color:var(--ink);font-weight:600;font-size:17px;margin-inline-start:6px}
+
+.scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:980px}
+th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+th{font-size:13px;font-weight:600;color:var(--muted);background:#FAFCFB;white-space:nowrap;position:sticky;top:0}
+th button{border:0;background:none;padding:0;cursor:pointer;font-weight:600;color:inherit}
+th button[data-dir]::after{content:" ▾";color:var(--petrol)}
+th button[data-dir=asc]::after{content:" ▴"}
+tbody tr.row{cursor:pointer}
+tbody tr.row:hover{background:#F6FAF9}
+.adname{font-weight:600;max-width:300px}
+.sub{font-size:12.5px;color:var(--muted);font-weight:400}
+.status{display:inline-block;font-size:12.5px;padding:1px 9px;border-radius:99px;background:var(--empty);color:var(--muted);white-space:nowrap}
+.status.active{background:var(--good-bg);color:var(--good)}
+.status.declined{background:var(--bad-bg);color:var(--bad)}
+.status.in_review,.status.ready_for_review{background:var(--mid-bg);color:#6A4A05}
+.cpl{font-weight:700}
+.cpl.good{color:var(--good)} .cpl.bad{color:var(--bad)}
+.none{color:#9AA8AE}
+
+/* شريط الأربع وعشرين ساعة: خانة لكل ساعة، لونها حسب تكلفة الليد */
+.strip{display:grid;grid-template-columns:repeat(24,9px);gap:2px;direction:ltr}
+.strip i{height:22px;border-radius:2px;background:var(--empty)}
+.strip i.g{background:var(--good)} .strip i.m{background:var(--mid)} .strip i.b{background:var(--bad)}
+.strip i.z{background:repeating-linear-gradient(135deg,var(--bad-bg) 0 3px,#EFC4BD 3px 5px)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--muted);margin:10px 2px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:11px;height:11px;border-radius:2px;display:inline-block;background:var(--empty)}
+.empty{padding:40px 20px;text-align:center;color:var(--muted)}
+
+.back{background:none;border:0;color:var(--petrol);cursor:pointer;padding:0;font-weight:500;margin:6px 0 10px}
+.dhead{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.dhead h2{margin:0;font-size:22px;font-weight:700}
+.adtext{color:var(--muted);max-width:70ch;margin:6px 0 0}
+.daynav{display:flex;align-items:center;gap:8px;margin:20px 0 6px;flex-wrap:wrap}
+.daynav h3{margin:0;font-size:17px;font-weight:600;margin-inline-end:8px}
+.daynav input{border:1px solid var(--line);border-radius:6px;padding:5px 8px;background:#fff}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));border:1px solid var(--line);border-radius:8px;background:var(--surface);margin:8px 0 14px}
+.kpis div{padding:12px 16px;border-inline-start:1px solid var(--line);font-size:13px;color:var(--muted)}
+.kpis div:first-child{border-inline-start:0}
+.kpis b{display:block;font-size:21px;font-weight:700;color:var(--ink)}
+.chart{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px;height:300px;margin-bottom:14px}
+h3.sec{font-size:17px;font-weight:600;margin:28px 0 8px}
+table.slim{min-width:680px}
+tr.future td{color:#B5C0C4}
+tr.best td{background:var(--good-bg)}
+@media (max-width:640px){header.top h1{font-size:20px}.field input[type=search]{width:150px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>إعلانات تيليجرام ساعة بساعة</h1>
+    <div class="sync"><span id="syncText">جارٍ التحميل</span><button class="btn ghost" id="syncBtn">حدّث الآن</button></div>
+  </header>
+  <div id="notices"></div>
+
+  <main id="list">
+    <div class="tools">
+      <div class="field"><span>الفترة</span>
+        <div class="seg" id="period">
+          <button data-p="hour">آخر ساعة</button><button data-p="3h">آخر 3 ساعات</button>
+          <button data-p="today">اليوم</button><button data-p="yesterday">أمس</button><button data-p="7d">آخر 7 أيام</button>
+        </div>
+      </div>
+      <label class="field" id="accField" hidden><span>الحساب</span><select id="account"></select></label>
+      <label class="field"><span>الحالة</span>
+        <select id="status">
+          <option value="">كل الحالات</option><option value="active">نشط</option><option value="on_hold">متوقف مؤقتًا</option>
+          <option value="stopped">متوقف</option><option value="in_review">قيد المراجعة</option>
+          <option value="ready_for_review">جاهز للمراجعة</option><option value="declined">مرفوض</option><option value="deleted">محذوف</option>
+        </select></label>
+      <label class="field"><span>أقصى تكلفة لليد</span><input type="number" id="maxCpl" min="0" step="0.01" placeholder="بدون حد"></label>
+      <label class="field"><span>أقل عدد ليدز</span><input type="number" id="minLeads" min="0" step="1" placeholder="0"></label>
+      <label class="field"><span>بحث بالاسم</span><input type="search" id="q" placeholder="اسم الإعلان"></label>
+    </div>
+    <div class="sum" id="sum"></div>
+    <div class="scroll"><table>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <div class="legend">
+      <span>شريط آخر 24 ساعة، خانة لكل ساعة والأحدث على اليمين:</span>
+      <span><i style="background:var(--good)"></i>تكلفة ليد جيدة</span>
+      <span><i style="background:var(--mid)"></i>أعلى من الهدف بقليل</span>
+      <span><i style="background:var(--bad)"></i>غالية</span>
+      <span><i style="background:repeating-linear-gradient(135deg,var(--bad-bg) 0 3px,#EFC4BD 3px 5px)"></i>صرف بدون ليدز</span>
+      <span><i></i>لا يوجد عرض</span>
+      <span id="refNote"></span>
+    </div>
+  </main>
+
+  <main id="detail" hidden></main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const nf = new Intl.NumberFormat('en-US');
+const CUR = {EUR:'يورو', TON:'جرام', XTR:'نجمة'};
+const STATUS = {active:'نشط', on_hold:'متوقف مؤقتًا', stopped:'متوقف', in_review:'قيد المراجعة',
+  ready_for_review:'جاهز للمراجعة', declined:'مرفوض', deleted:'محذوف'};
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const int = x => `<span class="num">${nf.format(x || 0)}</span>`;
+const money = (x, cur, d = 2) => x == null ? '<span class="none">لا يوجد</span>'
+  : `<span class="num">${Number(x).toFixed(cur === 'XTR' ? Math.min(d, 1) : d)}</span> <span class="sub">${CUR[cur] || cur || ''}</span>`;
+const pct = x => x == null ? '<span class="none">لا يوجد</span>' : `<span class="num">${x.toFixed(2)}%</span>`;
+
+const saved = (() => { try { return JSON.parse(localStorage.getItem('adsView') || '{}'); } catch { return {}; } })();
+const view = Object.assign({period:'today', account:'', status:'', maxCpl:'', minLeads:'', q:'', sort:'cpl', dir:'asc'}, saved);
+const save = () => { try { localStorage.setItem('adsView', JSON.stringify(view)); } catch {} };
+let data = null, charts = [];
+
+const COLS = [
+  ['title','الإعلان'], ['status','الحالة'], ['views','مشاهدات'], ['clicks','نقرات'], ['ctr','نسبة النقر'],
+  ['actions','ليدز'], ['spent','المصروف'], ['cpl','تكلفة الليد'], [null,'آخر 24 ساعة'], ['cpm','سعر الألف']
+];
+const val = (ad, k) => k === 'title' ? ad.title : k === 'status' ? ad.status : k === 'cpm' ? ad.cpm : ad.m[k];
+
+function cplClass(cpl, ref) {
+  if (cpl == null || !ref) return '';
+  return cpl <= ref ? 'good' : 'bad';
+}
+function stripHtml(ad, ref) {
+  return '<div class="strip">' + ad.strip.map(([a, s, v], i) => {
+    const h = new Date((data.strip_start + i * 3600) * 1000).getHours();
+    let c = '', tip = `الساعة ${h}: لا يوجد عرض`;
+    if (a > 0) {
+      const cpl = s / a;
+      c = !ref ? 'g' : cpl <= ref ? 'g' : cpl <= ref * 1.5 ? 'm' : 'b';
+      tip = `الساعة ${h}: ${a} ليد، تكلفة الليد ${cpl.toFixed(2)}`;
+    } else if (s > 0) { c = 'z'; tip = `الساعة ${h}: صرف ${s.toFixed(2)} بدون ليدز`; }
+    return `<i class="${c}" title="${tip}"></i>`;
+  }).join('') + '</div>';
+}
+
+function renderList() {
+  if (!data) return;
+  document.querySelectorAll('#period button').forEach(b => b.setAttribute('aria-pressed', b.dataset.p === view.period));
+  const accSel = $('#account');
+  $('#accField').hidden = data.accounts.length < 2;
+  accSel.innerHTML = '<option value="">كل الحسابات</option>' +
+    data.accounts.map(a => `<option value="${esc(a.account_id)}">${esc(a.title)}</option>`).join('');
+  accSel.value = view.account;
+
+  const maxCpl = parseFloat(view.maxCpl), minLeads = parseFloat(view.minLeads), q = view.q.trim().toLowerCase();
+  let ads = data.ads.filter(ad =>
+    (!view.account || ad.account_id === view.account) &&
+    (!view.status || ad.status === view.status) &&
+    (!q || (ad.title || '').toLowerCase().includes(q)) &&
+    (isNaN(maxCpl) || (ad.m.cpl != null && ad.m.cpl <= maxCpl)) &&
+    (isNaN(minLeads) || ad.m.actions >= minLeads));
+
+  const tot = ads.reduce((t, ad) => (t.s += ad.m.spent, t.a += ad.m.actions, t.c += ad.m.clicks, t.v += ad.m.views, t), {s:0,a:0,c:0,v:0});
+  const avg = tot.a ? tot.s / tot.a : null;
+  const ref = !isNaN(maxCpl) && maxCpl > 0 ? maxCpl : avg;   // مرجع التلوين: الهدف إن وُجد، وإلا المتوسط
+  const curs = [...new Set(ads.map(a => a.currency))];
+  const cur = curs.length === 1 ? curs[0] : '';
+
+  const dir = view.dir === 'asc' ? 1 : -1;
+  ads.sort((x, y) => {
+    const a = val(x, view.sort), b = val(y, view.sort);
+    if (a == null && b == null) return y.m.spent - x.m.spent;
+    if (a == null) return 1; if (b == null) return -1;
+    return (typeof a === 'string' ? a.localeCompare(b, 'ar') : a - b) * dir || y.m.spent - x.m.spent;
+  });
+
+  $('#head').innerHTML = COLS.map(([k, label]) => k
+    ? `<th><button data-k="${k}" ${view.sort === k ? `data-dir="${view.dir}"` : ''}>${label}</button></th>`
+    : `<th>${label}</th>`).join('');
+  $('#sum').innerHTML = `<span>إعلانات<b>${int(ads.length)}</b></span><span>المصروف<b>${money(tot.s, cur)}</b></span>
+    <span>ليدز<b>${int(tot.a)}</b></span><span>متوسط تكلفة الليد<b>${money(avg, cur)}</b></span>
+    <span>نسبة النقر<b>${pct(tot.v ? tot.c / tot.v * 100 : null)}</b></span>` +
+    (curs.length > 1 ? '<span>الحسابات بعملات مختلفة، اختاري حسابًا واحدًا لتكون المجاميع دقيقة</span>' : '');
+  $('#refNote').textContent = ref ? `التلوين بالنسبة إلى ${ref.toFixed(2)} (${!isNaN(maxCpl) && maxCpl > 0 ? 'الحد الذي حددتيه' : 'متوسط الإعلانات المعروضة'})` : '';
+
+  $('#rows').innerHTML = ads.length ? ads.map(ad => `
+    <tr class="row" tabindex="0" data-acc="${esc(ad.account_id)}" data-id="${ad.ad_id}">
+      <td><div class="adname">${esc(ad.title)}</div>${data.accounts.length > 1 ? `<div class="sub">${esc(ad.account_title)}</div>` : ''}</td>
+      <td><span class="status ${esc(ad.status)}">${STATUS[ad.status] || esc(ad.status)}</span></td>
+      <td>${int(ad.m.views)}</td><td>${int(ad.m.clicks)}</td><td>${pct(ad.m.ctr)}</td>
+      <td><b>${int(ad.m.actions)}</b></td><td>${money(ad.m.spent, ad.currency)}</td>
+      <td class="cpl ${cplClass(ad.m.cpl, ref)}">${money(ad.m.cpl, ad.currency)}</td>
+      <td>${stripHtml(ad, ref)}</td><td>${money(ad.cpm, ad.currency)}</td>
+    </tr>`).join('')
+    : `<tr><td colspan="${COLS.length}" class="empty">${data.ads.length
+        ? 'لا يوجد إعلان يطابق الفلتر. وسّعي الحد أو غيّري الفترة.'
+        : (data.syncing ? 'جارٍ سحب الإعلانات لأول مرة، قد يأخذ بضع دقائق.' : 'لا توجد إعلانات في الحساب بعد.')}</td></tr>`;
+}
+
+function renderMeta() {
+  const mins = data.last_sync ? Math.max(0, Math.round((Date.now() / 1000 - data.last_sync) / 60)) : null;
+  $('#syncText').textContent = data.syncing ? 'جارٍ سحب البيانات من تيليجرام'
+    : mins == null ? 'لم يتم السحب بعد' : mins === 0 ? 'آخر تحديث الآن' : `آخر تحديث منذ ${mins} دقيقة`;
+  $('#syncBtn').disabled = data.syncing;
+  $('#notices').innerHTML =
+    (data.demo ? '<div class="notice demo">هذه بيانات تجريبية للعرض فقط. لإظهار إعلاناتك شغّلي البرنامج برمز الوصول.</div>' : '') +
+    (data.last_error ? `<div class="notice err">فشل آخر سحب من تيليجرام: <span class="num">${esc(data.last_error)}</span></div>` : '');
+}
+
+async function loadList() {
+  const r = await fetch('/api/overview?period=' + view.period);
+  data = await r.json();
+  renderMeta(); renderList();
+}
+
+/* ---------- صفحة الإعلان ---------- */
+function drawChart(id, labels, leads, cpl) {
+  if (!window.Chart) { document.getElementById(id).parentElement.hidden = true; return; }
+  const ink = '#12222B';
+  Chart.defaults.font.family = '"IBM Plex Sans Arabic", Tahoma, sans-serif';
+  charts.push(new Chart(document.getElementById(id), {
+    data: {labels, datasets: [
+      {type:'bar', label:'ليدز', data:leads, backgroundColor:'#0B5563', borderRadius:2, yAxisID:'y'},
+      {type:'line', label:'تكلفة الليد', data:cpl, borderColor:'#C98A12', backgroundColor:'#C98A12', tension:.25, spanGaps:true, pointRadius:3, yAxisID:'y1'}
+    ]},
+    options: {maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
+      plugins:{legend:{position:'bottom', rtl:true, labels:{color:ink}}, tooltip:{rtl:true}},
+      scales:{x:{reverse:true, grid:{display:false}},
+        y:{position:'right', beginAtZero:true, title:{display:true, text:'ليدز'}, ticks:{precision:0}},
+        y1:{position:'left', beginAtZero:true, grid:{drawOnChartArea:false}, title:{display:true, text:'تكلفة الليد'}}}}
+  }));
+}
+function metricRow(first, m, cur, ref, cls = '') {
+  return `<tr class="${cls}"><td>${first}</td><td>${int(m.views)}</td><td>${int(m.clicks)}</td><td>${pct(m.ctr)}</td>
+    <td><b>${int(m.actions)}</b></td><td>${money(m.spent, cur)}</td>
+    <td class="cpl ${cplClass(m.cpl, ref)}">${money(m.cpl, cur)}</td><td>${money(m.cpc, cur, 3)}</td></tr>`;
+}
+const HEAD = first => `<thead><tr><th>${first}</th><th>مشاهدات</th><th>نقرات</th><th>نسبة النقر</th><th>ليدز</th><th>المصروف</th><th>تكلفة الليد</th><th>تكلفة النقرة</th></tr></thead>`;
+const shift = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const dayName = iso => new Date(iso + 'T12:00:00').toLocaleDateString('ar-EG', {weekday:'long', day:'numeric', month:'long'});
+
+async function loadDetail(acc, id, day) {
+  const r = await fetch(`/api/ad?account=${encodeURIComponent(acc)}&ad_id=${id}` + (day ? `&date=${day}` : ''));
+  const d = await r.json();
+  const box = $('#detail');
+  charts.forEach(c => c.destroy()); charts = [];
+  if (d.error) { box.innerHTML = `<button class="back" onclick="location.hash=''">رجوع لكل الإعلانات</button><p class="empty">${esc(d.error)}</p>`; return; }
+  const ad = d.ad, cur = ad.currency;
+  const sum = d.hourly.reduce((t, h) => (t.v += h.views, t.c += h.clicks, t.a += h.actions, t.s += h.spent, t), {v:0,c:0,a:0,s:0});
+  const maxCpl = parseFloat(view.maxCpl);
+  const ref = !isNaN(maxCpl) && maxCpl > 0 ? maxCpl : (sum.a ? sum.s / sum.a : null);
+  const withLeads = d.hourly.filter(h => h.cpl != null);
+  const best = withLeads.length ? withLeads.reduce((a, b) => b.cpl < a.cpl ? b : a) : null;
+  const hh = h => String(h).padStart(2, '0') + ':00';
+
+  box.innerHTML = `
+    <button class="back" onclick="location.hash=''">رجوع لكل الإعلانات</button>
+    <div class="dhead"><h2>${esc(ad.title)}</h2><span class="status ${esc(ad.status)}">${STATUS[ad.status] || esc(ad.status)}</span></div>
+    <p class="adtext">${esc(ad.text)}</p>
+    <p class="sub">سعر الألف ${money(ad.cpm, cur)}، المتبقي في ميزانية الإعلان ${money(ad.remaining, cur)}${ad.daily_limit ? `، الحد اليومي ${money(ad.daily_limit, cur)}` : ''}
+      ${ad.decline_reason ? `<br>سبب الرفض: ${esc(ad.decline_reason)}` : ''}</p>
+
+    <div class="daynav">
+      <h3>${dayName(d.date)}، ساعة بساعة</h3>
+      <button class="btn ghost" data-day="${shift(d.date, -1)}">اليوم السابق</button>
+      <input type="date" id="dayPick" value="${d.date}" max="${d.today}" aria-label="اختيار اليوم">
+      <button class="btn ghost" data-day="${shift(d.date, 1)}" ${d.date >= d.today ? 'disabled' : ''}>اليوم التالي</button>
+    </div>
+    <div class="kpis">
+      <div><b>${money(sum.s, cur)}</b>المصروف</div><div><b>${int(sum.a)}</b>ليدز</div>
+      <div><b>${money(sum.a ? sum.s / sum.a : null, cur)}</b>تكلفة الليد</div>
+      <div><b>${int(sum.v)}</b>مشاهدات</div><div><b>${pct(sum.v ? sum.c / sum.v * 100 : null)}</b>نسبة النقر</div>
+      <div><b>${best ? `<span class="num">${hh(best.hour)}</span>` : '<span class="none">لا يوجد</span>'}</b>أرخص ساعة</div>
+    </div>
+    <div class="chart"><canvas id="cHour"></canvas></div>
+    <div class="scroll"><table class="slim">${HEAD('الساعة')}<tbody>
+      ${d.hourly.map(h => metricRow(`<span class="num">${hh(h.hour)}</span>`, h, cur, ref, h.future ? 'future' : h === best ? 'best' : '')).join('')}
+    </tbody></table></div>
+
+    <h3 class="sec">الأداء يومًا بيوم، آخر ${d.daily.length} يومًا</h3>
+    <div class="chart"><canvas id="cDay"></canvas></div>
+    <div class="scroll"><table class="slim">${HEAD('اليوم')}<tbody>
+      ${d.daily.map(x => metricRow(`<button class="back" style="margin:0" data-day="${x.date}">${dayName(x.date)}</button>`, x, cur, ref)).join('')}
+    </tbody></table></div>`;
+
+  drawChart('cHour', d.hourly.map(h => hh(h.hour)), d.hourly.map(h => h.actions), d.hourly.map(h => h.cpl));
+  const days = [...d.daily].reverse();
+  drawChart('cDay', days.map(x => x.date.slice(5)), days.map(x => x.actions), days.map(x => x.cpl));
+  const go = day => location.hash = `ad/${encodeURIComponent(acc)}/${id}/${day}`;
+  box.querySelectorAll('[data-day]').forEach(b => b.onclick = () => { go(b.dataset.day); });
+  $('#dayPick').onchange = e => e.target.value && go(e.target.value);
+}
+
+function route() {
+  const m = location.hash.match(/^#ad\/([^/]+)\/(\d+)(?:\/(\d{4}-\d\d-\d\d))?/);
+  $('#list').hidden = !!m; $('#detail').hidden = !m;
+  if (m) { loadDetail(decodeURIComponent(m[1]), m[2], m[3]); window.scrollTo(0, 0); }
+  else loadList();
+}
+
+/* ---------- الأحداث ---------- */
+$('#period').onclick = e => { const p = e.target.dataset.p; if (p) { view.period = p; save(); loadList(); } };
+[['#account','account'], ['#status','status'], ['#maxCpl','maxCpl'], ['#minLeads','minLeads'], ['#q','q']].forEach(([sel, key]) => {
+  const el = $(sel); if (key !== 'account') el.value = view[key];
+  el.addEventListener('input', () => { view[key] = el.value; save(); renderList(); });
+});
+$('#head').onclick = e => {
+  const k = e.target.dataset.k; if (!k) return;
+  if (view.sort === k) view.dir = view.dir === 'asc' ? 'desc' : 'asc';
+  else { view.sort = k; view.dir = (k === 'cpl' || k === 'title' || k === 'cpm') ? 'asc' : 'desc'; }
+  save(); renderList();
+};
+const openRow = tr => tr && (location.hash = `ad/${encodeURIComponent(tr.dataset.acc)}/${tr.dataset.id}`);
+$('#rows').onclick = e => openRow(e.target.closest('tr.row'));
+$('#rows').onkeydown = e => { if (e.key === 'Enter') openRow(e.target.closest('tr.row')); };
+$('#syncBtn').onclick = async () => {
+  $('#syncBtn').disabled = true; $('#syncText').textContent = 'جارٍ سحب البيانات من تيليجرام';
+  await fetch('/api/sync', {method:'POST'});
+  setTimeout(route, 4000);
+};
+window.addEventListener('hashchange', route);
+setInterval(() => { if (!location.hash.startsWith('#ad/')) loadList(); }, 60000);
+route();
+</script>
+</body>
+</html>
