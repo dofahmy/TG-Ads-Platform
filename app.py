@@ -45,6 +45,8 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(HERE, "demo.db" if DEMO else "a
 STEP = 300            # أصغر فاصل تسمح به الواجهة: خمس دقائق
 CHUNK = 1000 * STEP   # أقصى فترة في الطلب الواحد
 OVERLAP = 2 * 3600    # نعيد سحب آخر ساعتين كل مرة لأن الأرقام الحديثة بتتعدل
+DELETE_WAIT = int(os.environ.get("DELETE_WAIT_SECONDS", "660"))  # تيليجرام يشترط توقف الإعلان 10 دقائق قبل حذفه
+DELETE_TRIES = 6      # عدد محاولات الحذف المؤجل قبل إظهاره كفشل
 REQUEST_GAP = 0.15    # مهلة بين الطلبات، التوثيق لا يذكر حدًا لعددها
 
 
@@ -159,6 +161,18 @@ class DemoAds:
                     {"channel_id": 1, "username": "deals_eg", "title": "عروض مصر"},
                     {"channel_id": 2, "username": "offers_sa", "title": "عروض السعودية"}]}
             return [ad] if ad else []
+        if method in ("editAd", "deleteAd"):
+            i = next((i for i, a in enumerate(self.ADS) if a[0] == p["ad_id"]), None)
+            if i is None:
+                raise ApiError("AD_NOT_FOUND")
+            if method == "deleteAd":
+                if self.ADS[i][6] == "active":
+                    raise ApiError("AD_IS_ACTIVE")
+                del self.ADS[i]
+                return True
+            status = "on_hold" if p.get("is_paused") else "active"
+            self.ADS[i] = self.ADS[i][:6] + (status,)
+            return {"ad_id": p["ad_id"], "status": status}
         if method == "createAd":
             if len(p.get("text", "")) > 160:
                 raise ApiError("AD_TEXT_TOO_LONG")
@@ -212,6 +226,9 @@ def init_db():
             clicks INTEGER, actions INTEGER, spent REAL,
             PRIMARY KEY(account_id, ad_id, t)) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS pending_deletes(
+            account_id TEXT, ad_id INTEGER, due INTEGER, tries INTEGER, error TEXT,
+            PRIMARY KEY(account_id, ad_id));
         """)
 
 
@@ -323,6 +340,33 @@ def sync_loop():
         wake.clear()
 
 
+def delete_loop():
+    """ينفذ الحذف المؤجل: الإعلانات التي أوقفناها وننتظر مرور المهلة لحذفها."""
+    while True:
+        time.sleep(min(30, max(2, DELETE_WAIT // 4)))
+        try:
+            with db() as con:
+                rows = con.execute("SELECT * FROM pending_deletes WHERE due<=? AND tries<?",
+                                   (int(time.time()), DELETE_TRIES)).fetchall()
+            for r in rows:
+                acc_id, ad_id = r["account_id"], r["ad_id"]
+                try:
+                    client.call("deleteAd", ad_id=ad_id, **acc_param_for(acc_id))
+                    gone = True
+                except ApiError as e:
+                    gone = "NOT_FOUND" in str(e)
+                    err = str(e)
+                with db() as con:
+                    if gone:
+                        con.execute("DELETE FROM pending_deletes WHERE account_id=? AND ad_id=?", (acc_id, ad_id))
+                        con.execute("UPDATE ads SET status='deleted' WHERE account_id=? AND ad_id=?", (acc_id, ad_id))
+                    else:  # نعيد المحاولة بعد دقيقتين
+                        con.execute("UPDATE pending_deletes SET tries=tries+1, due=?, error=? "
+                                    "WHERE account_id=? AND ad_id=?", (int(time.time()) + 120, err, acc_id, ad_id))
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------- الحسابات
 def metrics(v, c, a, s):
     v, c, a, s = v or 0, c or 0, a or 0, s or 0
@@ -384,7 +428,9 @@ def guard():
 
 @app.get("/")
 def index():
-    return send_from_directory(HERE, "index.html")
+    resp = send_from_directory(HERE, "index.html", max_age=0)
+    resp.headers["Cache-Control"] = "no-store"  # حتى لا يعرض المتصفح نسخة قديمة من الصفحة
+    return resp
 
 
 @app.get("/api/overview")
@@ -407,7 +453,9 @@ def overview():
                 "SELECT account_id, ad_id, t/3600 h, SUM(actions) a, SUM(spent) s, SUM(views) v "
                 "FROM stats WHERE t>=? AND t<? GROUP BY account_id, ad_id, h", (d0, d1)):
             hours.setdefault((r["account_id"], r["ad_id"]), {})[r["h"]] = (r["a"], round(r["s"], 5), r["v"])
+        pend = {(r["account_id"], r["ad_id"]): r for r in con.execute("SELECT * FROM pending_deletes")}
     acc_title = {a["account_id"]: a["title"] for a in accounts}
+    delete_errors = []
     out = []
     for ad in ads:
         key = (ad["account_id"], ad["ad_id"])
@@ -416,10 +464,16 @@ def overview():
         h = hours.get(key, {})
         ad["strip"] = [h.get(ts // 3600, (0, 0, 0)) for ts in strip_ts]
         ad["account_title"] = acc_title.get(ad["account_id"], "")
+        pd = pend.get(key)
+        if pd and ad["status"] != "deleted":
+            if pd["tries"] >= DELETE_TRIES:
+                delete_errors.append({"title": ad["title"], "error": pd["error"]})
+            else:
+                ad["delete_due"] = pd["due"]
         out.append(ad)
     return jsonify({
         "demo": DEMO, "syncing": syncing.is_set(), "last_sync": int(get_meta("last_sync", "0") or 0),
-        "last_error": get_meta("last_error"), "sync_minutes": SYNC_MINUTES,
+        "last_error": get_meta("last_error"), "delete_errors": delete_errors, "sync_minutes": SYNC_MINUTES,
         "strip_ts": strip_ts, "strip_hours": [datetime.fromtimestamp(ts, TZ).hour for ts in strip_ts],
         "strip_date": strip_day.isoformat(), "strip_label": "أمس" if is_yday else "اليوم",
         "range_text": range_text(start, min(end, now)), "tz": str(TZ), "accounts": accounts, "ads": out})
@@ -592,6 +646,50 @@ def create_ad():
         return jsonify({"ok": False, "error": f"بيانات ناقصة أو غير صحيحة: {e}"})
 
 
+@app.post("/api/bulk")
+def bulk():
+    """إيقاف أو تشغيل أو حذف مجموعة إعلانات، مع نتيجة مستقلة لكل إعلان."""
+    body = request.get_json(silent=True) or {}
+    action = body.get("action")
+    if action not in ("pause", "resume", "delete"):
+        return jsonify({"error": "إجراء غير معروف"}), 400
+    out = []
+    for it in (body.get("items") or [])[:300]:
+        acc_id, ad_id = str(it.get("account", "")), int(it.get("ad_id", 0))
+        try:
+            ap = acc_param_for(acc_id)
+            result = ""
+            if action == "delete":
+                try:  # لو الإعلان متوقف من مدة كافية يُحذف فورًا
+                    client.call("deleteAd", ad_id=ad_id, **ap)
+                    status = "deleted"
+                except ApiError as first:
+                    if "NOT_FOUND" in str(first):
+                        raise
+                    try:  # وإلا نوقفه الآن ونؤجل حذفه حتى تمر المهلة
+                        client.call("editAd", ad_id=ad_id, is_paused=True, **ap)
+                    except ApiError as second:
+                        raise ApiError(f"{first} / {second}")
+                    status, result = "on_hold", "pending"
+            else:
+                ad = client.call("editAd", ad_id=ad_id, is_paused=(action == "pause"), **ap) or {}
+                status = ad.get("status", "")
+            with db() as con:
+                if status:
+                    con.execute("UPDATE ads SET status=? WHERE account_id=? AND ad_id=?", (status, acc_id, ad_id))
+                if result == "pending":
+                    con.execute("INSERT OR REPLACE INTO pending_deletes VALUES(?,?,?,0,'')",
+                                (acc_id, ad_id, int(time.time()) + DELETE_WAIT))
+                else:  # التشغيل أو الإيقاف اليدوي أو الحذف الفوري يلغي أي حذف مؤجل سابق
+                    con.execute("DELETE FROM pending_deletes WHERE account_id=? AND ad_id=?", (acc_id, ad_id))
+            status = result or status
+            out.append({"account": acc_id, "ad_id": ad_id, "ok": True, "status": status})
+        except ApiError as e:
+            out.append({"account": acc_id, "ad_id": ad_id, "ok": False, "error": str(e)})
+    wake.set()
+    return jsonify({"results": out})
+
+
 @app.post("/api/sync")
 def sync_now():
     wake.set()
@@ -602,6 +700,7 @@ if __name__ == "__main__":
     prepare_db_path()
     init_db()
     threading.Thread(target=sync_loop, daemon=True).start()
+    threading.Thread(target=delete_loop, daemon=True).start()
     if DEMO:
         print("لا يوجد رمز وصول: التشغيل ببيانات تجريبية.")
     if not DASH_PASSWORD:

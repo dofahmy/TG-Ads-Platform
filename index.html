@@ -38,6 +38,15 @@ a.btn{text-decoration:none;display:inline-block}
 .check{display:flex;align-items:center;gap:8px;font-size:14px}
 .thumb{width:96px;height:54px;object-fit:cover;border-radius:4px;border:1px solid var(--line);display:block}
 .warn{color:var(--bad);font-size:12.5px} .okk{color:var(--good);font-weight:600}
+td.pick,th.pick{width:36px;padding-inline-end:0;cursor:default}
+td.pick input,th.pick input{width:17px;height:17px;cursor:pointer;accent-color:var(--petrol)}
+tr.row.sel{background:var(--petrol-soft)}
+#rows td{white-space:nowrap} #rows .adname{white-space:normal}
+#bulk{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px;background:var(--ink);color:#fff;border-radius:8px;padding:10px 14px;margin-bottom:10px}
+#bulk .btn{background:#fff;color:var(--ink);border-color:#fff}
+#bulk .btn.danger{background:var(--bad);color:#fff;border-color:var(--bad)}
+#bulk .btn.link{background:transparent;color:#fff;border-color:transparent;text-decoration:underline}
+.notice.ok{background:var(--good-bg);color:var(--good)}
 .notice{border-radius:6px;padding:9px 14px;margin-bottom:12px;font-size:14px}
 .notice.demo{background:var(--mid-bg);color:#6A4A05}
 .notice.err{background:var(--bad-bg);color:var(--bad)}
@@ -134,6 +143,8 @@ tr.best td{background:var(--good-bg)}
       <label class="field"><span>بحث بالاسم</span><input type="search" id="q" placeholder="اسم الإعلان"></label>
     </div>
     <div class="sum" id="sum"></div>
+    <div id="bulkMsg"></div>
+    <div id="bulk" hidden></div>
     <div class="scroll"><table>
       <thead><tr id="head"></tr></thead>
       <tbody id="rows"></tbody>
@@ -150,6 +161,7 @@ tr.best td{background:var(--good-bg)}
   </main>
 
   <main id="detail" hidden></main>
+  <p class="hint" style="margin-top:26px">نسخة الواجهة 5: اختيار الإعلانات بالخانات مع إيقاف وتشغيل وحذف مجمع</p>
   <main id="create" hidden></main>
 </div>
 
@@ -170,7 +182,8 @@ const pct = x => x == null ? '<span class="none">لا يوجد</span>' : `<span 
 const saved = (() => { try { return JSON.parse(localStorage.getItem('adsView') || '{}'); } catch { return {}; } })();
 const view = Object.assign({period:'today', account:'', status:'', maxCpl:'', minLeads:'', q:'', sort:'cpl', dir:'asc'}, saved);
 const save = () => { try { localStorage.setItem('adsView', JSON.stringify(view)); } catch {} };
-let data = null, charts = [];
+let data = null, charts = [], shown = [];
+const picked = new Set(), keyOf = ad => ad.account_id + '|' + ad.ad_id;
 const POST = {method:'POST', headers:{'X-Requested-With':'dashboard'}};
 
 const COLS = [
@@ -210,7 +223,7 @@ function renderList() {
   const maxCpl = parseFloat(view.maxCpl), minLeads = parseFloat(view.minLeads), q = view.q.trim().toLowerCase();
   let ads = data.ads.filter(ad =>
     (!view.account || ad.account_id === view.account) &&
-    (!view.status || ad.status === view.status) &&
+    (view.status ? ad.status === view.status : ad.status !== 'deleted') &&
     (!q || (ad.title || '').toLowerCase().includes(q)) &&
     (isNaN(maxCpl) || (ad.m.cpl != null && ad.m.cpl <= maxCpl)) &&
     (isNaN(minLeads) || ad.m.actions >= minLeads));
@@ -231,7 +244,8 @@ function renderList() {
     return (typeof a === 'string' ? a.localeCompare(b, 'ar') : a - b) * dir || y.m.spent - x.m.spent;
   });
 
-  $('#head').innerHTML = COLS.map(([k, label]) => k
+  shown = ads;
+  $('#head').innerHTML = `<th class="pick"><input type="checkbox" id="pickAll" aria-label="اختيار كل المعروض" ${ads.length && ads.every(a => picked.has(keyOf(a))) ? 'checked' : ''}></th>` + COLS.map(([k, label]) => k
     ? `<th><button data-k="${k}" ${view.sort === k ? `data-dir="${view.dir}"` : ''}>${label}</button></th>`
     : `<th>ليدز ${esc(data.strip_label)} بالساعة</th>`).join('');
   $('#sum').innerHTML = `<span>الفترة<b>${esc(data.range_text)}</b></span><span>إعلانات<b>${int(ads.length)}</b></span><span>المصروف<b>${money(tot.s, cur)}</b></span>
@@ -241,17 +255,52 @@ function renderList() {
   $('#refNote').textContent = ref24 ? `ألوان الشريط بالنسبة إلى ${fmt(ref24)} (${!isNaN(maxCpl) && maxCpl > 0 ? 'الحد الذي حددتيه' : `متوسط ${data.strip_label} للإعلانات المعروضة`})` : '';
 
   $('#rows').innerHTML = ads.length ? ads.map(ad => `
-    <tr class="row" tabindex="0" data-acc="${esc(ad.account_id)}" data-id="${ad.ad_id}">
+    <tr class="row ${picked.has(keyOf(ad)) ? 'sel' : ''}" tabindex="0" data-acc="${esc(ad.account_id)}" data-id="${ad.ad_id}">
+      <td class="pick"><input type="checkbox" data-key="${esc(keyOf(ad))}" aria-label="اختيار الإعلان" ${picked.has(keyOf(ad)) ? 'checked' : ''}></td>
       <td><div class="adname">${esc(ad.title)}</div>${data.accounts.length > 1 ? `<div class="sub">${esc(ad.account_title)}</div>` : ''}</td>
-      <td><span class="status ${esc(ad.status)}">${STATUS[ad.status] || esc(ad.status)}</span></td>
+      <td>${ad.delete_due
+        ? `<span class="status declined">يُحذف خلال <span class="num">${Math.max(1, Math.ceil((ad.delete_due - Date.now() / 1000) / 60))}</span> د</span>`
+        : `<span class="status ${esc(ad.status)}">${STATUS[ad.status] || esc(ad.status)}</span>`}</td>
       <td>${int(ad.m.views)}</td><td>${int(ad.m.clicks)}</td><td>${pct(ad.m.ctr)}</td>
       <td><b>${int(ad.m.actions)}</b></td><td>${money(ad.m.spent, ad.currency)}</td>
       <td class="cpl ${cplClass(ad.m.cpl, ref)}">${money(ad.m.cpl, ad.currency)}</td>
       <td>${stripHtml(ad, ref24)}</td><td>${money(ad.cpm, ad.currency)}</td>
     </tr>`).join('')
-    : `<tr><td colspan="${COLS.length}" class="empty">${data.ads.length
+    : `<tr><td colspan="${COLS.length + 1}" class="empty">${data.ads.length
         ? 'لا يوجد إعلان يطابق الفلتر. وسّعي الحد أو غيّري الفترة.'
         : (data.syncing ? 'جارٍ سحب الإعلانات لأول مرة، قد يأخذ بضع دقائق.' : 'لا توجد إعلانات في الحساب بعد.')}</td></tr>`;
+  renderBulk();
+}
+
+function renderBulk() {
+  const live = new Set((data ? data.ads : []).filter(a => a.status !== 'deleted').map(keyOf));
+  [...picked].forEach(k => live.has(k) || picked.delete(k));
+  const bar = $('#bulk'); bar.hidden = !picked.size;
+  bar.innerHTML = `<span>تم اختيار <b class="num">${picked.size}</b> إعلان</span>
+    <button class="btn" data-act="pause">إيقاف مؤقت</button><button class="btn" data-act="resume">تشغيل</button>
+    <button class="btn danger" data-act="delete">حذف</button><button class="btn link" data-act="clear">إلغاء الاختيار</button>`;
+}
+const ACTS = {pause: ['إيقاف', 'سيتم إيقاف'], resume: ['تشغيل', 'سيتم تشغيل'], delete: ['حذف', 'سيتم حذف']};
+async function runBulk(act) {
+  if (act === 'clear') { picked.clear(); return renderList(); }
+  const n = picked.size;
+  const q = `${ACTS[act][1]} ${n} إعلان.` + (act === 'delete' ? ' الحذف نهائي. الإعلانات الشغالة ستتوقف الآن وتُحذف تلقائيًا بعد نحو 11 دقيقة، ويمكن إلغاء الحذف خلالها بالضغط على تشغيل.' : '') + ' متابعة؟';
+  if (!confirm(q)) return;
+  const items = [...picked].map(k => { const i = k.lastIndexOf('|'); return {account: k.slice(0, i), ad_id: +k.slice(i + 1)}; });
+  $('#bulk').innerHTML = `<span>جارٍ ${ACTS[act][0]} <b class="num">${n}</b> إعلان، انتظري</span>`;
+  let res;
+  try { res = (await (await fetch('/api/bulk', {...POST, headers: {...POST.headers, 'Content-Type': 'application/json'}, body: JSON.stringify({action: act, items})})).json()).results || []; }
+  catch (e) { res = items.map(x => ({...x, ok: false, error: 'انقطع الاتصال بالخادم'})); }
+  const title = r => (data.ads.find(a => a.account_id === r.account && a.ad_id === r.ad_id) || {}).title || r.ad_id;
+  const bad = res.filter(r => !r.ok), good = res.length - bad.length;
+  res.filter(r => r.ok).forEach(r => picked.delete(r.account + '|' + r.ad_id));   // الفاشلة تبقى مختارة لإعادة المحاولة
+  const later = res.filter(r => r.ok && r.status === 'pending').length, now = good - later;
+  $('#bulkMsg').innerHTML =
+    (now ? `<div class="notice ok">تم ${ACTS[act][0]} <span class="num">${now}</span> إعلان.</div>` : '') +
+    (later ? `<div class="notice ok">تم إيقاف <span class="num">${later}</span> إعلان، وسيُحذف تلقائيًا خلال نحو 11 دقيقة حتى لو أغلقتِ الصفحة. للتراجع اختاريه واضغطي تشغيل.</div>` : '') +
+    (bad.length ? `<div class="notice err">فشل ${ACTS[act][0]} <span class="num">${bad.length}</span> إعلان، وهي ما زالت مختارة:` +
+      bad.map(r => `<br>${esc(title(r))}: <span class="num">${esc(r.error)}</span>`).join('') + '</div>' : '');
+  await loadList();
 }
 
 function renderMeta() {
@@ -261,6 +310,7 @@ function renderMeta() {
   $('#syncBtn').disabled = data.syncing;
   $('#notices').innerHTML =
     (data.demo ? '<div class="notice demo">هذه بيانات تجريبية للعرض فقط. لإظهار إعلاناتك شغّلي البرنامج برمز الوصول.</div>' : '') +
+    (data.delete_errors || []).map(e => `<div class="notice err">تعذر حذف «${esc(e.title)}» بعد عدة محاولات: <span class="num">${esc(e.error)}</span>. اختاريه واضغطي حذف لإعادة المحاولة.</div>`).join('') +
     (data.last_error ? `<div class="notice err">فشل آخر سحب من تيليجرام: <span class="num">${esc(data.last_error)}</span></div>` : '');
 }
 
@@ -498,8 +548,21 @@ $('#head').onclick = e => {
   save(); renderList();
 };
 const openRow = tr => tr && (location.hash = `ad/${encodeURIComponent(tr.dataset.acc)}/${tr.dataset.id}/${data.strip_date}`);
-$('#rows').onclick = e => openRow(e.target.closest('tr.row'));
-$('#rows').onkeydown = e => { if (e.key === 'Enter') openRow(e.target.closest('tr.row')); };
+$('#rows').onclick = e => { if (!e.target.closest('.pick')) openRow(e.target.closest('tr.row')); };
+$('#rows').addEventListener('change', e => {
+  const k = e.target.dataset.key; if (!k) return;
+  e.target.checked ? picked.add(k) : picked.delete(k);
+  e.target.closest('tr').classList.toggle('sel', e.target.checked);
+  $('#pickAll').checked = shown.length && shown.every(a => picked.has(keyOf(a)));
+  renderBulk();
+});
+$('#head').addEventListener('change', e => {
+  if (e.target.id !== 'pickAll') return;
+  shown.forEach(a => e.target.checked ? picked.add(keyOf(a)) : picked.delete(keyOf(a)));
+  renderList();
+});
+$('#bulk').onclick = e => { const a = e.target.dataset.act; if (a) runBulk(a); };
+$('#rows').onkeydown = e => { if (e.key === 'Enter' && !e.target.closest('.pick')) openRow(e.target.closest('tr.row')); };
 $('#syncBtn').onclick = async () => {
   $('#syncBtn').disabled = true; $('#syncText').textContent = 'جارٍ سحب البيانات من تيليجرام';
   await fetch('/api/sync', POST);
