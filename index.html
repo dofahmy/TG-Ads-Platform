@@ -67,8 +67,9 @@ tbody tr.row:hover{background:#F6FAF9}
 
 /* شريط الأربع وعشرين ساعة: خانة لكل ساعة، لونها حسب تكلفة الليد */
 .s24{display:flex;align-items:center;gap:10px}.s24 b{min-width:2.4em}
-.strip{display:grid;grid-template-columns:repeat(24,9px);gap:2px;direction:ltr}
+.strip{display:grid;grid-auto-flow:column;grid-auto-columns:9px;gap:2px;justify-content:start}
 .strip i{height:22px;border-radius:2px;background:var(--empty)}
+.strip i.f{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
 .strip i.g{background:var(--good)} .strip i.m{background:var(--mid)} .strip i.b{background:var(--bad)}
 .strip i.z{background:repeating-linear-gradient(135deg,var(--bad-bg) 0 3px,#EFC4BD 3px 5px)}
 .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--muted);margin:10px 2px}
@@ -128,7 +129,7 @@ tr.best td{background:var(--good-bg)}
       <tbody id="rows"></tbody>
     </table></div>
     <div class="legend">
-      <span>الشريط ثابت على آخر 24 ساعة ولا يتغير مع الفترة المختارة. خانة لكل ساعة والأحدث على اليمين، والرقم بجانبه مجموع ليدز الـ24 ساعة.</span>
+      <span>الشريط يعرض ساعات اليوم نفسه من منتصف الليل (على اليمين) إلى 11 مساءً، ومع اختيار «أمس» يعرض ساعات أمس. الرقم بجانبه مجموع ليدز ذلك اليوم، وهو نفس الرقم في صفحة الإعلان.</span>
       <span><i style="background:var(--good)"></i>تكلفة ليد جيدة</span>
       <span><i style="background:var(--mid)"></i>أعلى من الهدف بقليل</span>
       <span><i style="background:var(--bad)"></i>غالية</span>
@@ -175,7 +176,8 @@ function stripHtml(ad, ref) {
   return `<div class="s24"><b class="num">${nf.format(total)}</b><div class="strip">` + ad.strip.map(([a, s, v], i) => {
     const h = String(data.strip_hours[i]).padStart(2, '0') + ':00';
     let c = '', tip = `${h}: لا يوجد عرض`;
-    if (a > 0) {
+    if (data.strip_ts[i] > Date.now() / 1000) { c = 'f'; tip = `${h}: لم تأتِ بعد`; }
+    else if (a > 0) {
       const cpl = s / a;
       c = !ref ? 'g' : cpl <= ref ? 'g' : cpl <= ref * 1.5 ? 'm' : 'b';
       tip = `${h}: ${a} ليد، المصروف ${fmt(s)}، تكلفة الليد ${fmt(cpl)}`;
@@ -219,12 +221,12 @@ function renderList() {
 
   $('#head').innerHTML = COLS.map(([k, label]) => k
     ? `<th><button data-k="${k}" ${view.sort === k ? `data-dir="${view.dir}"` : ''}>${label}</button></th>`
-    : `<th>${label}</th>`).join('');
+    : `<th>ليدز ${esc(data.strip_label)} بالساعة</th>`).join('');
   $('#sum').innerHTML = `<span>الفترة<b>${esc(data.range_text)}</b></span><span>إعلانات<b>${int(ads.length)}</b></span><span>المصروف<b>${money(tot.s, cur)}</b></span>
     <span>ليدز<b>${int(tot.a)}</b></span><span>متوسط تكلفة الليد<b>${money(avg, cur)}</b></span>
     <span>نسبة النقر<b>${pct(tot.v ? tot.c / tot.v * 100 : null)}</b></span>` +
     (curs.length > 1 ? '<span>الحسابات بعملات مختلفة، اختاري حسابًا واحدًا لتكون المجاميع دقيقة</span>' : '');
-  $('#refNote').textContent = ref24 ? `ألوان الشريط بالنسبة إلى ${fmt(ref24)} (${!isNaN(maxCpl) && maxCpl > 0 ? 'الحد الذي حددتيه' : 'متوسط آخر 24 ساعة للإعلانات المعروضة'})` : '';
+  $('#refNote').textContent = ref24 ? `ألوان الشريط بالنسبة إلى ${fmt(ref24)} (${!isNaN(maxCpl) && maxCpl > 0 ? 'الحد الذي حددتيه' : `متوسط ${data.strip_label} للإعلانات المعروضة`})` : '';
 
   $('#rows').innerHTML = ads.length ? ads.map(ad => `
     <tr class="row" tabindex="0" data-acc="${esc(ad.account_id)}" data-id="${ad.ad_id}">
@@ -353,7 +355,7 @@ $('#head').onclick = e => {
   else { view.sort = k; view.dir = (k === 'cpl' || k === 'title' || k === 'cpm') ? 'asc' : 'desc'; }
   save(); renderList();
 };
-const openRow = tr => tr && (location.hash = `ad/${encodeURIComponent(tr.dataset.acc)}/${tr.dataset.id}`);
+const openRow = tr => tr && (location.hash = `ad/${encodeURIComponent(tr.dataset.acc)}/${tr.dataset.id}/${data.strip_date}`);
 $('#rows').onclick = e => openRow(e.target.closest('tr.row'));
 $('#rows').onkeydown = e => { if (e.key === 'Enter') openRow(e.target.closest('tr.row')); };
 $('#syncBtn').onclick = async () => {

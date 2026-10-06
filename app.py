@@ -361,7 +361,11 @@ def index():
 def overview():
     now = int(time.time())
     start, end = period_range(request.args.get("period", "today"), now)
-    first_hour = (now // 3600 - 23) * 3600
+    # شريط الساعات يعرض يومًا تقويميًا كاملًا: أمس لو الفترة أمس، وغير ذلك اليوم الحالي
+    is_yday = request.args.get("period") == "yesterday"
+    strip_day = today() - timedelta(days=1) if is_yday else today()
+    d0, d1 = day_start(strip_day), day_start(strip_day + timedelta(days=1))
+    strip_ts = list(range(d0, d1, 3600))
     with db() as con:
         accounts = [dict(r) for r in con.execute("SELECT * FROM accounts ORDER BY is_main DESC, title")]
         ads = [dict(r) for r in con.execute("SELECT * FROM ads")]
@@ -371,7 +375,7 @@ def overview():
         hours = {}
         for r in con.execute(
                 "SELECT account_id, ad_id, t/3600 h, SUM(actions) a, SUM(spent) s, SUM(views) v "
-                "FROM stats WHERE t>=? GROUP BY account_id, ad_id, h", (first_hour,)):
+                "FROM stats WHERE t>=? AND t<? GROUP BY account_id, ad_id, h", (d0, d1)):
             hours.setdefault((r["account_id"], r["ad_id"]), {})[r["h"]] = (r["a"], round(r["s"], 5), r["v"])
     acc_title = {a["account_id"]: a["title"] for a in accounts}
     out = []
@@ -380,14 +384,14 @@ def overview():
         t = totals.get(key)
         ad["m"] = metrics(t["v"], t["c"], t["a"], t["s"]) if t else metrics(0, 0, 0, 0)
         h = hours.get(key, {})
-        ad["strip"] = [h.get(first_hour // 3600 + i, (0, 0, 0)) for i in range(24)]
+        ad["strip"] = [h.get(ts // 3600, (0, 0, 0)) for ts in strip_ts]
         ad["account_title"] = acc_title.get(ad["account_id"], "")
         out.append(ad)
     return jsonify({
         "demo": DEMO, "syncing": syncing.is_set(), "last_sync": int(get_meta("last_sync", "0") or 0),
         "last_error": get_meta("last_error"), "sync_minutes": SYNC_MINUTES,
-        "strip_start": first_hour,
-        "strip_hours": [datetime.fromtimestamp(first_hour + i * 3600, TZ).hour for i in range(24)],
+        "strip_ts": strip_ts, "strip_hours": [datetime.fromtimestamp(ts, TZ).hour for ts in strip_ts],
+        "strip_date": strip_day.isoformat(), "strip_label": "أمس" if is_yday else "اليوم",
         "range_text": range_text(start, min(end, now)), "tz": str(TZ), "accounts": accounts, "ads": out})
 
 
