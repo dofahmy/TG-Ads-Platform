@@ -78,6 +78,17 @@ class TelegramAds:
             raise ApiError(last)
         raise ApiError(last)
 
+    def upload(self, method, name, blob, mime, **params):
+        try:
+            r = self.s.post(f"{API_BASE}/{method}", data=params,
+                            files={"file": (name, blob, mime)}, timeout=120)
+            data = r.json()
+        except (requests.RequestException, ValueError) as e:
+            raise ApiError(f"NETWORK_ERROR: {e}")
+        if data.get("ok"):
+            return data["result"]
+        raise ApiError(str(data.get("error", f"HTTP_{r.status_code}")))
+
 
 class DemoAds:
     """بيانات وهمية بنفس شكل ردود الواجهة، للتجربة من غير رمز وصول."""
@@ -141,7 +152,23 @@ class DemoAds:
                 if b:
                     out.append(b)
             return out
+        if method == "getAdsById":
+            ad = next((a for a in self.call("getAdsList")["ads"] if a["ad_id"] in p["ad_ids"]), None)
+            if ad:
+                ad["target"] = {"type": "channels", "channels": [
+                    {"channel_id": 1, "username": "deals_eg", "title": "عروض مصر"},
+                    {"channel_id": 2, "username": "offers_sa", "title": "عروض السعودية"}]}
+            return [ad] if ad else []
+        if method == "createAd":
+            if len(p.get("text", "")) > 160:
+                raise ApiError("AD_TEXT_TOO_LONG")
+            new_id = max(a[0] for a in self.ADS) + 1
+            self.ADS.append((new_id, p["title"], p["cpm"], 0, 0.0, 0.0, "in_review"))
+            return {"ad_id": new_id, "status": "in_review"}
         raise ApiError("METHOD_NOT_IN_DEMO")
+
+    def upload(self, method, name, blob, mime, **params):
+        return {"photo_id": "demo-" + name, "photo_url": ""}
 
 
 client = DemoAds() if DEMO else TelegramAds(TOKEN)
@@ -343,6 +370,9 @@ app = Flask(__name__)
 
 @app.before_request
 def guard():
+    # طلبات التعديل لا تُقبل إلا من الصفحة نفسها، حتى لا يرسلها موقع آخر باسمك
+    if request.method == "POST" and request.headers.get("X-Requested-With") != "dashboard":
+        return Response("طلب غير مسموح", 403)
     if not DASH_PASSWORD:
         return None
     auth = request.authorization
@@ -438,6 +468,128 @@ def ad_detail():
             daily.append(m)
     return jsonify({"ad": dict(ad), "date": d.isoformat(), "today": today().isoformat(),
                     "hourly": hourly, "daily": daily})
+
+
+# ---------------------------------------------------------------- إنشاء إعلانات بنفس إعدادات إعلان موجود
+PLACEMENTS = {"channel_post": "منشور في قناة", "bot_banner": "شريط في بوت",
+              "search_result": "نتيجة بحث", "video_banner": "شريط فيديو"}
+COPY_FIELDS = ["promote_url", "cpm", "placement", "impression_frequency", "website_name", "button",
+               "conversion_event_id", "additional_info", "show_userpic", "daily_budget_limit", "schedule"]
+PHOTO_CACHE = {}  # مفتاح عدم التكرار -> رقم الصورة المرفوعة، حتى لا تتغير الصورة عند إعادة المحاولة
+
+
+def acc_param_for(acc_id):
+    with db() as con:
+        r = con.execute("SELECT is_main FROM accounts WHERE account_id=?", (acc_id,)).fetchone()
+    if not r:
+        raise ApiError("ACCOUNT_UNKNOWN")
+    return {} if r["is_main"] else {"account_id": acc_id}
+
+
+def fetch_template(acc_id, ad_id):
+    res = client.call("getAdsById", ad_ids=[ad_id], return_target=True, **acc_param_for(acc_id))
+    if not res:
+        raise ApiError("AD_NOT_FOUND")
+    return res[0]
+
+
+def input_target(t):
+    """يحوّل الاستهداف كما يرجعه تيليجرام إلى الشكل المطلوب عند الإنشاء."""
+    def refs(key, id_key):
+        # اسم المستخدم هو المفضل، لأن الأرقام لا تُقبل إلا لو سبق حلّها بالاسم
+        return [("@" + x["username"]) if x.get("username") else x[id_key] for x in t.get(key) or []]
+    ids = lambda key, id_key: [x[id_key] for x in t.get(key) or []]
+    typ = t.get("type")
+    out = {"type": typ}
+    if typ == "search":
+        out["search_queries"] = t.get("search_queries") or []
+    elif typ == "bots":
+        out["bot_ids"] = refs("bots", "bot_id")
+    else:
+        if typ == "users":
+            out["country_codes"] = ids("countries", "country_code")
+            for k in ("intersect_topics", "device", "exclude_political_channels", "political_channels_only"):
+                if t.get(k):
+                    out[k] = t[k]
+        extra = {"language_codes": ids("languages", "language_code"), "topic_ids": ids("topics", "topic_id"),
+                 "exclude_topic_ids": ids("exclude_topics", "topic_id"),
+                 "channel_ids": refs("channels", "channel_id"),
+                 "exclude_channel_ids": refs("exclude_channels", "channel_id"),
+                 "location_ids": ids("locations", "location_id"),
+                 "audience_ids": ids("audiences", "audience_id"),
+                 "exclude_audience_ids": ids("exclude_audiences", "audience_id")}
+        out.update({k: v for k, v in extra.items() if v})
+    return out
+
+
+def target_text(t):
+    names = lambda key, n="name": "، ".join(str(x.get(n) or x.get("title") or x.get("username") or "") for x in t.get(key) or [])
+    typ = t.get("type")
+    if typ == "search":
+        return "كلمات بحث: " + "، ".join(t.get("search_queries") or [])
+    if typ == "bots":
+        return f"بوتات ({len(t.get('bots') or [])}): " + names("bots", "title")
+    parts = []
+    for key, label, n in (("countries", "الدول", "name"), ("locations", "المناطق", "name"), ("languages", "اللغات", "name"),
+                          ("topics", "المواضيع", "name"), ("exclude_topics", "مواضيع مستبعدة", "name"),
+                          ("channels", "القنوات", "title"), ("exclude_channels", "قنوات مستبعدة", "title"),
+                          ("audiences", "جماهير", "title"), ("exclude_audiences", "جماهير مستبعدة", "title")):
+        if t.get(key):
+            parts.append(f"{label} ({len(t[key])}): {names(key, n)}")
+    if t.get("device"):
+        parts.append("الجهاز: " + t["device"])
+    head = "استهداف قنوات" if typ == "channels" else "استهداف مستخدمين"
+    return head + (" — " + " | ".join(parts) if parts else "")
+
+
+@app.get("/api/template")
+def template():
+    try:
+        ad = fetch_template(request.args.get("account", ""), int(request.args.get("ad_id", "0")))
+    except ApiError as e:
+        return jsonify({"error": str(e)})
+    t = ad.get("target") or {}
+    return jsonify({
+        "title": ad.get("title", ""), "text": ad.get("text", ""), "promote_url": ad.get("promote_url", ""),
+        "cpm": ad.get("cpm", 0), "currency": ad.get("currency", ""),
+        "daily_budget_limit": ad.get("daily_budget_limit", 0),
+        "placement": PLACEMENTS.get(ad.get("placement"), ad.get("placement", "")),
+        "target_type": t.get("type", ""), "target_text": target_text(t),
+        "media": "photo" if ad.get("photo") else "video" if ad.get("video") else ""})
+
+
+@app.post("/api/create_ad")
+def create_ad():
+    f = request.form
+    try:
+        acc_id, key = f["account"], f["key"]
+        ap = acc_param_for(acc_id)
+        tpl = fetch_template(acc_id, int(f["template"]))
+        params = {k: tpl[k] for k in COPY_FIELDS if tpl.get(k) not in (None, "", 0, False)}
+        params["target"] = input_target(tpl.get("target") or {})
+        if (tpl.get("website_photo") or {}).get("photo_id"):
+            params["website_photo_id"] = tpl["website_photo"]["photo_id"]
+        params.update(title=f["title"], text=f["text"], cpm=float(f["cpm"]),
+                      initial_budget=float(f.get("budget") or 0),
+                      daily_budget_limit=float(f.get("daily") or 0),
+                      is_paused=f.get("paused") == "1")
+        photo = request.files.get("photo")
+        if photo:
+            if key not in PHOTO_CACHE:
+                PHOTO_CACHE[key] = client.upload("uploadAdPhoto", photo.filename, photo.read(),
+                                                 photo.mimetype, **ap)["photo_id"]
+            params["photo_id"] = PHOTO_CACHE[key]
+        elif tpl.get("photo"):
+            params["photo_id"] = tpl["photo"]["photo_id"]
+        elif tpl.get("video"):
+            params["video_id"] = tpl["video"]["video_id"]
+        ad = client.call("createAd", idempotency_key=key, **params, **ap)
+        wake.set()
+        return jsonify({"ok": True, "ad_id": ad.get("ad_id"), "status": ad.get("status", "")})
+    except ApiError as e:
+        return jsonify({"ok": False, "error": str(e)})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "error": f"بيانات ناقصة أو غير صحيحة: {e}"})
 
 
 @app.post("/api/sync")
