@@ -210,7 +210,8 @@ def sync_ad(acc_id, acc_param, ad):
     changed = old is None or not old["synced_until"] or old["views"] != views or old["spent"] != spent
     synced_until = old["synced_until"] if old else None
 
-    if changed and views:
+    # الإعلان النشط يُعاد سحبه كل مرة، لأن أرقام الفواصل الأخيرة قد تتأخر عن الإجمالي
+    if (changed or ad.get("status") == "active") and views:
         if synced_until:
             start = synced_until - OVERLAP
         else:
@@ -300,8 +301,8 @@ def metrics(v, c, a, s):
     v, c, a, s = v or 0, c or 0, a or 0, s or 0
     return {"views": v, "clicks": c, "actions": a, "spent": round(s, 5),
             "ctr": round(c / v * 100, 2) if v else None,
-            "cpc": round(s / c, 4) if c else None,
-            "cpl": round(s / a, 4) if a else None,
+            "cpc": round(s / c, 6) if c else None,
+            "cpl": round(s / a, 6) if a else None,
             "cpm": round(s / v * 1000, 3) if v else None}
 
 
@@ -315,15 +316,25 @@ def today():
 
 def period_range(period, now):
     t = today()
-    if period == "hour":
-        return now - 3600, now + STEP
-    if period == "3h":
-        return now - 3 * 3600, now + STEP
+    h = now // 3600 * 3600  # بداية الساعة الحالية
+    if period == "now":      # الساعة الحالية من أولها حتى الآن (غير مكتملة)
+        return h, now + STEP
+    if period == "hour":     # آخر ساعة مكتملة، مثل 14:00 إلى 15:00
+        return h - 3600, h
+    if period == "3h":       # آخر ثلاث ساعات مكتملة
+        return h - 3 * 3600, h
     if period == "yesterday":
         return day_start(t - timedelta(days=1)), day_start(t)
     if period == "7d":
         return day_start(t - timedelta(days=6)), now + STEP
     return day_start(t), now + STEP
+
+
+def range_text(start, end):
+    a, b = datetime.fromtimestamp(start, TZ), datetime.fromtimestamp(end, TZ)
+    if a.date() == b.date():
+        return f"{a:%d/%m} من {a:%H:%M} إلى {b:%H:%M}"
+    return f"من {a:%d/%m %H:%M} إلى {b:%d/%m %H:%M}"
 
 
 # ---------------------------------------------------------------- الويب
@@ -375,7 +386,9 @@ def overview():
     return jsonify({
         "demo": DEMO, "syncing": syncing.is_set(), "last_sync": int(get_meta("last_sync", "0") or 0),
         "last_error": get_meta("last_error"), "sync_minutes": SYNC_MINUTES,
-        "strip_start": first_hour, "accounts": accounts, "ads": out})
+        "strip_start": first_hour,
+        "strip_hours": [datetime.fromtimestamp(first_hour + i * 3600, TZ).hour for i in range(24)],
+        "range_text": range_text(start, min(end, now)), "tz": str(TZ), "accounts": accounts, "ads": out})
 
 
 @app.get("/api/ad")

@@ -66,6 +66,7 @@ tbody tr.row:hover{background:#F6FAF9}
 .none{color:#9AA8AE}
 
 /* شريط الأربع وعشرين ساعة: خانة لكل ساعة، لونها حسب تكلفة الليد */
+.s24{display:flex;align-items:center;gap:10px}.s24 b{min-width:2.4em}
 .strip{display:grid;grid-template-columns:repeat(24,9px);gap:2px;direction:ltr}
 .strip i{height:22px;border-radius:2px;background:var(--empty)}
 .strip i.g{background:var(--good)} .strip i.m{background:var(--mid)} .strip i.b{background:var(--bad)}
@@ -106,7 +107,7 @@ tr.best td{background:var(--good-bg)}
     <div class="tools">
       <div class="field"><span>الفترة</span>
         <div class="seg" id="period">
-          <button data-p="hour">آخر ساعة</button><button data-p="3h">آخر 3 ساعات</button>
+          <button data-p="now">الساعة الحالية</button><button data-p="hour">الساعة السابقة</button><button data-p="3h">آخر 3 ساعات كاملة</button>
           <button data-p="today">اليوم</button><button data-p="yesterday">أمس</button><button data-p="7d">آخر 7 أيام</button>
         </div>
       </div>
@@ -127,7 +128,7 @@ tr.best td{background:var(--good-bg)}
       <tbody id="rows"></tbody>
     </table></div>
     <div class="legend">
-      <span>شريط آخر 24 ساعة، خانة لكل ساعة والأحدث على اليمين:</span>
+      <span>الشريط ثابت على آخر 24 ساعة ولا يتغير مع الفترة المختارة. خانة لكل ساعة والأحدث على اليمين، والرقم بجانبه مجموع ليدز الـ24 ساعة.</span>
       <span><i style="background:var(--good)"></i>تكلفة ليد جيدة</span>
       <span><i style="background:var(--mid)"></i>أعلى من الهدف بقليل</span>
       <span><i style="background:var(--bad)"></i>غالية</span>
@@ -148,8 +149,10 @@ const STATUS = {active:'نشط', on_hold:'متوقف مؤقتًا', stopped:'م�
   ready_for_review:'جاهز للمراجعة', declined:'مرفوض', deleted:'محذوف'};
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const int = x => `<span class="num">${nf.format(x || 0)}</span>`;
-const money = (x, cur, d = 2) => x == null ? '<span class="none">لا يوجد</span>'
-  : `<span class="num">${Number(x).toFixed(cur === 'XTR' ? Math.min(d, 1) : d)}</span> <span class="sub">${CUR[cur] || cur || ''}</span>`;
+// الأرقام الصغيرة (مثل مبالغ الجرام) تظهر حتى أربع خانات عشرية بدل أن تُقرَّب إلى صفر
+const fmt = x => Number(x).toFixed(4).replace(/(\.\d\d\d*?)0+$/, '$1');
+const money = (x, cur) => x == null ? '<span class="none">لا يوجد</span>'
+  : `<span class="num">${fmt(x)}</span> <span class="sub">${CUR[cur] || cur || ''}</span>`;
 const pct = x => x == null ? '<span class="none">لا يوجد</span>' : `<span class="num">${x.toFixed(2)}%</span>`;
 
 const saved = (() => { try { return JSON.parse(localStorage.getItem('adsView') || '{}'); } catch { return {}; } })();
@@ -159,7 +162,7 @@ let data = null, charts = [];
 
 const COLS = [
   ['title','الإعلان'], ['status','الحالة'], ['views','مشاهدات'], ['clicks','نقرات'], ['ctr','نسبة النقر'],
-  ['actions','ليدز'], ['spent','المصروف'], ['cpl','تكلفة الليد'], [null,'آخر 24 ساعة'], ['cpm','سعر الألف']
+  ['actions','ليدز'], ['spent','المصروف'], ['cpl','تكلفة الليد'], [null,'ليدز آخر 24 ساعة'], ['cpm','سعر الألف']
 ];
 const val = (ad, k) => k === 'title' ? ad.title : k === 'status' ? ad.status : k === 'cpm' ? ad.cpm : ad.m[k];
 
@@ -168,16 +171,17 @@ function cplClass(cpl, ref) {
   return cpl <= ref ? 'good' : 'bad';
 }
 function stripHtml(ad, ref) {
-  return '<div class="strip">' + ad.strip.map(([a, s, v], i) => {
-    const h = new Date((data.strip_start + i * 3600) * 1000).getHours();
-    let c = '', tip = `الساعة ${h}: لا يوجد عرض`;
+  const total = ad.strip.reduce((t, c) => t + c[0], 0);
+  return `<div class="s24"><b class="num">${nf.format(total)}</b><div class="strip">` + ad.strip.map(([a, s, v], i) => {
+    const h = String(data.strip_hours[i]).padStart(2, '0') + ':00';
+    let c = '', tip = `${h}: لا يوجد عرض`;
     if (a > 0) {
       const cpl = s / a;
       c = !ref ? 'g' : cpl <= ref ? 'g' : cpl <= ref * 1.5 ? 'm' : 'b';
-      tip = `الساعة ${h}: ${a} ليد، تكلفة الليد ${cpl.toFixed(2)}`;
-    } else if (s > 0) { c = 'z'; tip = `الساعة ${h}: صرف ${s.toFixed(2)} بدون ليدز`; }
+      tip = `${h}: ${a} ليد، المصروف ${fmt(s)}، تكلفة الليد ${fmt(cpl)}`;
+    } else if (s > 0 || v > 0) { c = 'z'; tip = `${h}: ${v} مشاهدة، صرف ${fmt(s)} بدون ليدز`; }
     return `<i class="${c}" title="${tip}"></i>`;
-  }).join('') + '</div>';
+  }).join('') + '</div></div>';
 }
 
 function renderList() {
@@ -200,6 +204,8 @@ function renderList() {
   const tot = ads.reduce((t, ad) => (t.s += ad.m.spent, t.a += ad.m.actions, t.c += ad.m.clicks, t.v += ad.m.views, t), {s:0,a:0,c:0,v:0});
   const avg = tot.a ? tot.s / tot.a : null;
   const ref = !isNaN(maxCpl) && maxCpl > 0 ? maxCpl : avg;   // مرجع التلوين: الهدف إن وُجد، وإلا المتوسط
+  const s24 = ads.reduce((t, ad) => { ad.strip.forEach(([a, s]) => { t.a += a; t.s += s; }); return t; }, {a:0, s:0});
+  const ref24 = !isNaN(maxCpl) && maxCpl > 0 ? maxCpl : (s24.a ? s24.s / s24.a : null);  // مرجع ألوان الشريط
   const curs = [...new Set(ads.map(a => a.currency))];
   const cur = curs.length === 1 ? curs[0] : '';
 
@@ -214,11 +220,11 @@ function renderList() {
   $('#head').innerHTML = COLS.map(([k, label]) => k
     ? `<th><button data-k="${k}" ${view.sort === k ? `data-dir="${view.dir}"` : ''}>${label}</button></th>`
     : `<th>${label}</th>`).join('');
-  $('#sum').innerHTML = `<span>إعلانات<b>${int(ads.length)}</b></span><span>المصروف<b>${money(tot.s, cur)}</b></span>
+  $('#sum').innerHTML = `<span>الفترة<b>${esc(data.range_text)}</b></span><span>إعلانات<b>${int(ads.length)}</b></span><span>المصروف<b>${money(tot.s, cur)}</b></span>
     <span>ليدز<b>${int(tot.a)}</b></span><span>متوسط تكلفة الليد<b>${money(avg, cur)}</b></span>
     <span>نسبة النقر<b>${pct(tot.v ? tot.c / tot.v * 100 : null)}</b></span>` +
     (curs.length > 1 ? '<span>الحسابات بعملات مختلفة، اختاري حسابًا واحدًا لتكون المجاميع دقيقة</span>' : '');
-  $('#refNote').textContent = ref ? `التلوين بالنسبة إلى ${ref.toFixed(2)} (${!isNaN(maxCpl) && maxCpl > 0 ? 'الحد الذي حددتيه' : 'متوسط الإعلانات المعروضة'})` : '';
+  $('#refNote').textContent = ref24 ? `ألوان الشريط بالنسبة إلى ${fmt(ref24)} (${!isNaN(maxCpl) && maxCpl > 0 ? 'الحد الذي حددتيه' : 'متوسط آخر 24 ساعة للإعلانات المعروضة'})` : '';
 
   $('#rows').innerHTML = ads.length ? ads.map(ad => `
     <tr class="row" tabindex="0" data-acc="${esc(ad.account_id)}" data-id="${ad.ad_id}">
@@ -227,7 +233,7 @@ function renderList() {
       <td>${int(ad.m.views)}</td><td>${int(ad.m.clicks)}</td><td>${pct(ad.m.ctr)}</td>
       <td><b>${int(ad.m.actions)}</b></td><td>${money(ad.m.spent, ad.currency)}</td>
       <td class="cpl ${cplClass(ad.m.cpl, ref)}">${money(ad.m.cpl, ad.currency)}</td>
-      <td>${stripHtml(ad, ref)}</td><td>${money(ad.cpm, ad.currency)}</td>
+      <td>${stripHtml(ad, ref24)}</td><td>${money(ad.cpm, ad.currency)}</td>
     </tr>`).join('')
     : `<tr><td colspan="${COLS.length}" class="empty">${data.ads.length
         ? 'لا يوجد إعلان يطابق الفلتر. وسّعي الحد أو غيّري الفترة.'
@@ -270,7 +276,7 @@ function drawChart(id, labels, leads, cpl) {
 function metricRow(first, m, cur, ref, cls = '') {
   return `<tr class="${cls}"><td>${first}</td><td>${int(m.views)}</td><td>${int(m.clicks)}</td><td>${pct(m.ctr)}</td>
     <td><b>${int(m.actions)}</b></td><td>${money(m.spent, cur)}</td>
-    <td class="cpl ${cplClass(m.cpl, ref)}">${money(m.cpl, cur)}</td><td>${money(m.cpc, cur, 3)}</td></tr>`;
+    <td class="cpl ${cplClass(m.cpl, ref)}">${money(m.cpl, cur)}</td><td>${money(m.cpc, cur)}</td></tr>`;
 }
 const HEAD = first => `<thead><tr><th>${first}</th><th>مشاهدات</th><th>نقرات</th><th>نسبة النقر</th><th>ليدز</th><th>المصروف</th><th>تكلفة الليد</th><th>تكلفة النقرة</th></tr></thead>`;
 const shift = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
