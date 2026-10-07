@@ -43,8 +43,10 @@ BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "14"))
 DASH_USER = os.environ.get("DASH_USER", "admin")
 DASH_PASSWORD = os.environ.get("DASH_PASSWORD", "")
 PORT = int(os.environ.get("PORT", "8000"))
-TRACK_BOT_TOKEN = os.environ.get("TRACK_BOT_TOKEN", "").strip()   # بوت مشرف في قنواتك يسجل الاشتراك والخروج
-NOTIFY_CHAT_ID = os.environ.get("NOTIFY_CHAT_ID", "").strip()     # المحادثة التي تصلها تنبيهات الحارس
+# أسماء المتغيرات تُقرأ بتسامح: مسافات زائدة حول الاسم أو علامات تنصيص حول القيمة لا تمنع قراءتها
+ENV = {k.strip().upper(): v.strip().strip('"').strip("'") for k, v in os.environ.items()}
+TRACK_BOT_TOKEN = ENV.get("TRACK_BOT_TOKEN", "")   # بوت مشرف في قنواتك يسجل الاشتراك والخروج
+NOTIFY_CHAT_ID = ENV.get("NOTIFY_CHAT_ID", "")     # المحادثة التي تصلها تنبيهات الحارس
 STAY_MINUTES = int(os.environ.get("STAY_MINUTES", "60"))          # من يخرج قبلها لا يُحسب ليدًا باقيًا
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("DB_PATH", os.path.join(HERE, "demo.db" if DEMO else "ads.db"))
@@ -1106,6 +1108,7 @@ def guard_get():
             "GROUP BY c.chat_id ORDER BY joins DESC", (STAY_MINUTES * 60, now - 86400))]
     return jsonify({"settings": guard_settings(), "log": log, "rules": RULES, "chats": chats,
                     "bot": bool(TRACK_BOT_TOKEN) or DEMO, "notify": bool(TRACK_BOT_TOKEN and NOTIFY_CHAT_ID),
+                    "env_names": sorted(k for k in os.environ if re.search(r"TRACK|BOT|NOTIFY|TOKEN", k, re.I)),
                     "track_error": get_meta("track_error"), "guard_error": get_meta("guard_error"),
                     "stay_minutes": STAY_MINUTES})
 
@@ -1581,6 +1584,7 @@ if __name__ == "__main__":
         threading.Thread(target=run_check, daemon=True, args=(
             json.loads(get_meta("check_names", "[]") or "[]"),
             json.loads(get_meta("check_invalid", "[]") or "[]"), False)).start()
+    print("تتبع الاشتراك والخروج:", "مفعّل" if TRACK_BOT_TOKEN else "غير مفعّل (المتغير TRACK_BOT_TOKEN غير موجود)", flush=True)
     if DEMO:
         print("لا يوجد رمز وصول: التشغيل ببيانات تجريبية.")
     if not DASH_PASSWORD:

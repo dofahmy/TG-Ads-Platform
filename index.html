@@ -169,7 +169,7 @@ tr.best td{background:var(--good-bg)}
   <main id="channels" hidden></main>
   <main id="guard" hidden></main>
   <main id="camp" hidden></main>
-  <p class="hint" style="margin-top:26px">نسخة الواجهة 9: الحملات التلقائية</p>
+  <p class="hint" style="margin-top:26px">نسخة الواجهة 10: الحملات التلقائية، مع تشخيص متغيرات التتبع</p>
 </div>
 
 <script>
@@ -679,7 +679,8 @@ async function showGuard() {
     ${g.guard_error ? `<div class="notice err">خطأ في آخر تشغيل للحارس: <span class="num">${esc(g.guard_error)}</span></div>` : ''}
 
     <h3 class="sec">تتبع الاشتراك والخروج</h3>
-    ${!g.bot ? `<div class="notice demo">التتبع غير مفعّل. أنشئي بوتًا جديدًا مخصصًا لهذا البرنامج، وضعي رمزه في المتغير <span class="num">TRACK_BOT_TOKEN</span>، ثم أضيفيه مشرفًا في قنواتك. بدون التتبع يعمل الحارس على ليدز تيليجرام كما هي.</div>`
+    ${!g.bot ? `<div class="notice demo">التتبع غير مفعّل. أنشئي بوتًا جديدًا مخصصًا لهذا البرنامج، وضعي رمزه في المتغير <span class="num">TRACK_BOT_TOKEN</span>، ثم أضيفيه مشرفًا في قنواتك. بدون التتبع يعمل الحارس على ليدز تيليجرام كما هي.
+        <br>المتغيرات القريبة التي يراها البرنامج الآن: <span class="num">${(g.env_names || []).map(esc).join(' ، ') || 'لا شيء'}</span></div>`
       : g.track_error ? `<div class="notice err">البوت لا يستقبل التحديثات: <span class="num">${esc(g.track_error)}</span></div>` : ''}
     ${g.chats.length ? `<div class="scroll"><table class="slim"><thead><tr><th>القناة</th><th>اشتراكات آخر 24 ساعة</th><th>خرجوا خلال <span class="num">${g.stay_minutes}</span> دقيقة</th><th>نسبة الخروج السريع</th></tr></thead><tbody>
       ${g.chats.map(c => `<tr><td><b>${esc(c.title)}</b>${c.username ? `<div class="sub num">@${esc(c.username)}</div>` : '<div class="warn">قناة خاصة بدون اسم عام، لا يمكن ربطها بالإعلانات</div>'}</td>
