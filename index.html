@@ -169,7 +169,7 @@ tr.best td{background:var(--good-bg)}
   <main id="channels" hidden></main>
   <main id="guard" hidden></main>
   <main id="camp" hidden></main>
-  <p class="hint" style="margin-top:26px">نسخة الواجهة 10: الحملات التلقائية، مع تشخيص متغيرات التتبع</p>
+  <p class="hint" style="margin-top:26px">نسخة الواجهة 11: الحملات تنتظر مهلة تيليجرام وتكمل وحدها</p>
 </div>
 
 <script>
@@ -750,7 +750,7 @@ async function showCamps() {
         <div><b><span class="num">${c.winners_leads24}</span></b>ليدز الناجحين آخر 24 ساعة</div>
         <div><b><span class="num">${c.pool}</span></b>تركيبة لم تُجرَّب بعد</div>
       </div>
-      <div class="bar2"><span class="sub"><span class="num">${c.creatives}</span> نص، <span class="num">${c.channels}</span> قناة في <span class="num">${c.groups}</span> مجموعة، سعر الألف ${money(c.cpm, cur)}</span>
+      <div class="bar2"><span class="sub"><span class="num">${c.creatives}</span> نص، <span class="num">${c.channels}</span> قناة في <span class="num">${c.groups}</span> مجموعة، سعر الألف ${money(c.cpm, cur)}${c.promote_url ? `، القناة المعلن عنها <span class="num" dir="ltr">${esc(c.promote_url.replace('https://', ''))}</span>` : ''}</span>
         ${live ? `<button class="btn ghost" data-c="${c.id}" data-a="pause">إيقاف مؤقت</button>` : ''}
         ${c.state === 'paused' ? `<button class="btn" data-c="${c.id}" data-a="resume">استئناف</button>` : ''}
         ${c.state !== 'ended' ? `<button class="btn ghost" data-c="${c.id}" data-a="stop">إنهاء الحملة</button>` : ''}</div>
@@ -769,12 +769,13 @@ async function showCamps() {
     <button class="back" onclick="location.hash=''">رجوع لكل الإعلانات</button>
     <div class="dhead"><h2>الحملات التلقائية</h2></div>
     <p class="adtext">تحددين الهدف والمواد، والبرنامج ينشئ إعلانات تجريبية بحدود صغيرة، يوقف الضعيف ويكبّر الناجح ويجرّب البدائل حتى يتحقق الهدف، دون أن يتجاوز الحد اليومي.</p>
+    ${d.create_wait ? `<div class="notice err">تيليجرام أوقف إنشاء إعلانات جديدة مؤقتًا بسبب كثرة الطلبات، حتى <span class="num">${when(d.create_wait)}</span>. الحملات تكمل تلقائيًا بعدها، ولا حاجة لإعادة إنشائها.</div>` : ''}
     ${d.error ? `<div class="notice err">خطأ في آخر دورة للحملات: <span class="num">${esc(d.error)}</span></div>` : ''}
     ${d.camps.map(card).join('')}
     <h3 class="sec">حملة جديدة</h3>
     <div class="form">
       <label class="field"><span>اسم الحملة</span><input type="text" id="kName" maxlength="60"></label>
-      <label class="field"><span>إعلان موجود يُنسخ منه الرابط وباقي الإعدادات</span><select id="kTpl"><option value="">اختاري إعلانًا</option>${opts}</select></label>
+      <label class="field"><span>إعلان موجود يعلن عن نفس القناة (الحملة تعلن عن قناته وتنسخ باقي إعداداته)</span><select id="kTpl"><option value="">اختاري إعلانًا</option>${opts}</select></label>
       <div class="row">
         <label class="field"><span>هدف الليدز يوميًا</span><input type="number" id="kLeads" min="1" step="1"></label>
         <label class="field"><span>أقصى صرف يومي (شامل التجارب)</span><input type="number" id="kBudget" min="0" step="0.01"></label>

@@ -64,6 +64,34 @@ class ApiError(Exception):
     pass
 
 
+class FloodWait(ApiError):
+    """تيليجرام طلب الانتظار مدة طويلة قبل تكرار هذا النوع من الطلبات."""
+
+
+FLOOD = {}  # اسم الطلب -> الوقت الذي يُسمح بتكراره بعده
+
+
+def flood_until(method):
+    if method not in FLOOD:
+        try:
+            FLOOD[method] = int(float(get_meta("flood_" + method, "0") or 0))
+        except Exception:
+            return 0
+    return FLOOD[method] if FLOOD[method] > time.time() else 0
+
+
+def flood_set(method, until):
+    FLOOD[method] = int(until)
+    try:
+        set_meta("flood_" + method, int(until))
+    except Exception:
+        pass
+
+
+def clock(ts):
+    return datetime.fromtimestamp(ts, TZ).strftime("%H:%M يوم %d/%m")
+
+
 class TelegramAds:
     def __init__(self, token):
         self.s = requests.Session()
@@ -71,6 +99,9 @@ class TelegramAds:
 
     def call(self, method, **params):
         last = "NETWORK_ERROR"
+        until = flood_until(method)
+        if until:  # لا نرسل الطلب أصلًا طوال مهلة الانتظار حتى لا تطول
+            raise FloodWait(f"FLOOD_WAIT_{int(until - time.time())}")
         for attempt in range(5):
             try:
                 r = self.s.post(f"{API_BASE}/{method}", json=params, timeout=40)
@@ -83,6 +114,10 @@ class TelegramAds:
                 time.sleep(REQUEST_GAP)
                 return data.get("result")
             last = str(data.get("error", f"HTTP_{r.status_code}"))
+            m = re.search(r"FLOOD_WAIT_(\d+)", last)
+            if m and int(m.group(1)) > 30:
+                flood_set(method, time.time() + int(m.group(1)))
+                raise FloodWait(last)
             if r.status_code == 429 or r.status_code >= 500 or "FLOOD" in last or "TOO_MANY" in last:
                 time.sleep(3 * (attempt + 1))
                 continue
@@ -1242,6 +1277,10 @@ def camp_create_ad(c, tpl, ap, creative, group, limit):
         ad = client.call("createAd", idempotency_key=f"camp{cid}-{creative['id']}-{group['id']}", **params, **ap)
         ad_id, created, state, reason = ad["ad_id"], ad.get("created_date") or int(time.time()), "testing", ""
         camp_log(cid, f"إعلان تجريبي جديد «{title}» بحد يومي {limit}")
+    except FloodWait:  # مهلة مؤقتة من تيليجرام: التركيبة تبقى في الانتظار ولا تُحسب فاشلة
+        camp_log(cid, f"تيليجرام طلب الانتظار قبل إنشاء إعلانات جديدة حتى {clock(flood_until('createAd'))}. "
+                      "الحملة تكمل تلقائيًا بعدها.")
+        return None
     except ApiError as e:  # نسجل التركيبة كفاشلة حتى لا تتكرر المحاولة كل دورة
         ad_id, created, state, reason = -(creative["id"] * 100000 + group["id"]), int(time.time()), "stopped", f"تعذر الإنشاء: {e}"
         camp_log(cid, f"تعذر إنشاء «{title}»: {e}")
@@ -1353,12 +1392,17 @@ def run_campaign(c):
     done = {(a["creative_id"], a["group_id"]) for a in cads}
     pool = [(cr, g) for g in groups for cr in creatives if (cr["id"], g["id"]) not in done]
     testing = sum(1 for a in live if a["state"] == "testing")
-    if state == "running" and pool:
+    if state == "running" and pool and flood_until("createAd"):
+        pass  # ننتظر انتهاء مهلة تيليجرام
+    elif state == "running" and pool:
         tpl, made = None, 0
         while pool and made < NEW_PER_CYCLE and testing < MAX_TESTS and committed + test_limit <= budget:
             tpl = tpl or fetch_template(acc, c["template"])
             cr, g = pool.pop(0)
-            if camp_create_ad(c, tpl, ap, cr, g, test_limit):
+            ok = camp_create_ad(c, tpl, ap, cr, g, test_limit)
+            if ok is None:
+                break
+            if ok:
                 testing += 1
                 committed += test_limit
                 made += 1
@@ -1375,6 +1419,27 @@ def run_campaign(c):
                             "الحملة تحتاج نصوصًا أو صورًا أو قنوات جديدة."}[state]
         camp_log(cid, msg)
         notify(f"حملة {c['name']}: {msg}")
+
+
+def repair_flood():
+    """تركيبات سُجّلت فاشلة بسبب مهلة انتظار مؤقتة: تعود للانتظار وتُكمل الحملة بعد المهلة."""
+    with db() as con:
+        rows = con.execute("SELECT camp_id, created, reason FROM camp_ads WHERE ad_id<0 AND reason LIKE '%FLOOD_WAIT%'").fetchall()
+        if not rows:
+            return
+        until = 0
+        for r in rows:
+            m = re.search(r"FLOOD_WAIT_(\d+)", r["reason"])
+            until = max(until, r["created"] + int(m.group(1)) if m else 0)
+        ids = sorted({r["camp_id"] for r in rows})
+        con.execute("DELETE FROM camp_ads WHERE ad_id<0 AND reason LIKE '%FLOOD_WAIT%'")
+        for i in ids:
+            con.execute("UPDATE campaigns SET state='running' WHERE id=? AND state='exhausted'", (i,))
+    if until > flood_until("createAd"):
+        flood_set("createAd", until)
+    for i in ids:
+        camp_log(i, "التركيبات لم تفشل، تيليجرام طلب مهلة انتظار مؤقتة"
+                    + (f" حتى {clock(until)}" if until > time.time() else "") + ". الحملة تكمل تلقائيًا بعدها.")
 
 
 def campaigns_run():
@@ -1460,6 +1525,8 @@ def camps_get():
             grp = {r["id"]: r for r in con.execute("SELECT id, idx, channels FROM camp_groups WHERE camp_id=?", (c["id"],))}
             c["log"] = [dict(r) for r in con.execute(
                 "SELECT ts, text FROM camp_log WHERE camp_id=? ORDER BY id DESC LIMIT 40", (c["id"],))]
+            t = con.execute("SELECT promote_url FROM ads WHERE account_id=? AND ad_id=?", (c["account_id"], c["template"])).fetchone()
+        c["promote_url"] = t["promote_url"] if t else ""
         ads = camp_view(c)
         for a in ads:
             cr, g = cre.get(a["creative_id"]), grp.get(a["group_id"])
@@ -1473,7 +1540,7 @@ def camps_get():
                  today_spent=round(sum(a["day"]["spent"] for a in ads), 5),
                  today_leads=round(sum(a["day"]["leads"] for a in ads), 1),
                  winners_leads24=round(sum(a["h24"]["leads"] for a in live if a["state"] == "winner"), 1))
-    return jsonify({"camps": camps, "error": get_meta("camp_error")})
+    return jsonify({"camps": camps, "error": get_meta("camp_error"), "create_wait": flood_until("createAd")})
 
 
 @app.post("/api/camp_act")
@@ -1574,6 +1641,7 @@ def sync_now():
 if __name__ == "__main__":
     prepare_db_path()
     init_db()
+    repair_flood()
     threading.Thread(target=sync_loop, daemon=True).start()
     threading.Thread(target=delete_loop, daemon=True).start()
     if DEMO:
