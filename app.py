@@ -27,6 +27,7 @@ import random
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -234,6 +235,7 @@ def init_db():
             clicks INTEGER, actions INTEGER, spent REAL,
             PRIMARY KEY(account_id, ad_id, t)) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS channel_results(name TEXT PRIMARY KEY, data TEXT, ts INTEGER);
         CREATE TABLE IF NOT EXISTS channel_snap(
             username TEXT, day TEXT, subs INTEGER, PRIMARY KEY(username, day));
         CREATE TABLE IF NOT EXISTS pending_deletes(
@@ -714,6 +716,9 @@ def fetch_preview(name):
         r = requests.get(f"https://t.me/s/{name}", params={"before": before} if before else None, timeout=15,
                          headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                                                 "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"})
+        if r.status_code == 429:  # تيليجرام يطلب التهدئة
+            time.sleep(8)
+            continue
         if r.status_code != 200 or "tgme_widget_message" not in r.text:
             break
         s, t, found = parse_preview(r.text)
@@ -758,15 +763,21 @@ def channel_metrics(subs, posts):
             "posts_per_day": round((len(posts) - 1) / (span / 86400), 1) if span > 3600 else None}
 
 
-@app.post("/api/check_channel")
-def check_channel():
-    raw = str((request.get_json(silent=True) or {}).get("name", "")).strip()
-    name = re.sub(r"^(https?://)?(t\.me/|telegram\.me/)(s/)?", "", raw).lstrip("@").split("/")[0].split("?")[0]
-    if not re.fullmatch(r"[A-Za-z0-9_]{4,32}", name):
-        return jsonify({"name": raw, "error": "اسم غير صالح"})
+CHECK_LIMIT = 2000
+check_job = {"names": [], "invalid": [], "done": 0, "running": False, "stop": False}
+ads_lock = threading.Lock()  # طلبات واجهة الإعلانات تمر واحدًا واحدًا حتى لا نتجاوز حدودها
+
+
+def clean_channel(raw):
+    name = re.sub(r"^(https?://)?(t\.me/|telegram\.me/)(s/)?", "", raw.strip()).lstrip("@").split("/")[0].split("?")[0]
+    return name if re.fullmatch(r"[A-Za-z0-9_]{4,32}", name) else None
+
+
+def check_one(name):
     out = {"name": name, "title": "", "ads_ok": False, "ads_error": "", "preview_ok": False}
     try:
-        ch = client.call("getTargetChannel", channel_id="@" + name) or {}
+        with ads_lock:
+            ch = client.call("getTargetChannel", channel_id="@" + name) or {}
         out.update(ads_ok=True, title=ch.get("title", ""))
     except ApiError as e:
         out["ads_error"] = str(e)
@@ -785,7 +796,73 @@ def check_channel():
             out.update(first_day=first["day"], first_subs=first["subs"])
     except requests.RequestException as e:
         out["preview_error"] = str(e)
-    return jsonify(out)
+    return out
+
+
+def run_check(names, invalid, force):
+    """يفحص القائمة في الخلفية بأربعة خيوط، ويحفظ كل نتيجة فور وصولها."""
+    check_job.update(names=names, invalid=invalid, done=0, running=True, stop=False)
+    set_meta("check_names", json.dumps(names))
+    set_meta("check_invalid", json.dumps(invalid))
+    set_meta("check_active", "1")
+    fresh = time.time() - 24 * 3600
+
+    def work(name):
+        try:
+            if check_job["stop"]:
+                return
+            with db() as con:
+                row = con.execute("SELECT data, ts FROM channel_results WHERE name=?", (name.lower(),)).fetchone()
+            if not force and row and row["ts"] > fresh and json.loads(row["data"]).get("preview_ok"):
+                return  # فُحصت بنجاح خلال آخر 24 ساعة
+            res = check_one(name)
+            with db() as con:
+                con.execute("INSERT OR REPLACE INTO channel_results VALUES(?,?,?)",
+                            (name.lower(), json.dumps(res, ensure_ascii=False), int(time.time())))
+        except Exception:
+            pass
+        finally:
+            check_job["done"] += 1
+
+    with ThreadPoolExecutor(4) as pool:
+        list(pool.map(work, names))
+    check_job["running"] = False
+    set_meta("check_active", "0")
+
+
+@app.post("/api/check_start")
+def check_start():
+    if check_job["running"]:
+        return jsonify({"ok": False, "error": "يوجد فحص يعمل الآن"})
+    body = request.get_json(silent=True) or {}
+    names, invalid, seen = [], [], set()
+    for raw in body.get("names") or []:
+        name = clean_channel(str(raw))
+        if not name:
+            invalid.append(str(raw)[:60])
+        elif name.lower() not in seen:
+            seen.add(name.lower())
+            names.append(name)
+    names = names[:CHECK_LIMIT]
+    threading.Thread(target=run_check, args=(names, invalid[:200], bool(body.get("force"))), daemon=True).start()
+    return jsonify({"ok": True, "total": len(names)})
+
+
+@app.post("/api/check_stop")
+def check_stop():
+    check_job["stop"] = True
+    return jsonify({"ok": True})
+
+
+@app.get("/api/check_status")
+def check_status():
+    names = check_job["names"] or json.loads(get_meta("check_names", "[]") or "[]")
+    invalid = check_job["invalid"] or json.loads(get_meta("check_invalid", "[]") or "[]")
+    with db() as con:
+        rows = {r["name"]: r["data"] for r in con.execute("SELECT name, data FROM channel_results")}
+    results = [json.loads(rows[n.lower()]) for n in names if n.lower() in rows]
+    return jsonify({"running": check_job["running"], "done": check_job["done"], "total": len(names),
+                    "results": results, "invalid": invalid, "names": names})
 
 
 @app.post("/api/bulk")
@@ -843,6 +920,10 @@ if __name__ == "__main__":
     init_db()
     threading.Thread(target=sync_loop, daemon=True).start()
     threading.Thread(target=delete_loop, daemon=True).start()
+    if get_meta("check_active") == "1":  # فحص قنوات انقطع بإعادة تشغيل الخدمة، نكمله
+        threading.Thread(target=run_check, daemon=True, args=(
+            json.loads(get_meta("check_names", "[]") or "[]"),
+            json.loads(get_meta("check_invalid", "[]") or "[]"), False)).start()
     if DEMO:
         print("لا يوجد رمز وصول: التشغيل ببيانات تجريبية.")
     if not DASH_PASSWORD:

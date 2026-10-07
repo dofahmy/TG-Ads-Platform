@@ -167,7 +167,7 @@ tr.best td{background:var(--good-bg)}
   <main id="detail" hidden></main>
   <main id="create" hidden></main>
   <main id="channels" hidden></main>
-  <p class="hint" style="margin-top:26px">نسخة الواجهة 6: فحص القنوات، واختيار الإعلانات بالخانات مع إيقاف وتشغيل وحذف مجمع</p>
+  <p class="hint" style="margin-top:26px">نسخة الواجهة 7: فحص حتى 2000 قناة في الخلفية، وتقسيم القنوات المختارة على مجموعات من 100</p>
 </div>
 
 <script>
@@ -422,7 +422,8 @@ async function showCreate(acc, id) {
       <label class="field"><span>الإعلان الذي تُنسخ إعداداته</span><select id="cTpl"><option value="">اختاري إعلانًا</option>${opts}</select></label>
       <div class="setup" id="cInfo" hidden></div>
       ${chanTarget.length ? `<div class="setup" id="cTarget"><b>الاستهداف: <span class="num">${chanTarget.length}</span> قناة مختارة من فحص القنوات</b> (بدل استهداف الإعلان الأصلي)
-        <div class="sub" dir="ltr" style="text-align:right">${chanTarget.map(c => '@' + esc(c)).join(' ')}</div>
+        ${chanTarget.length > 100 ? `<br>تيليجرام يقبل 100 قناة في الإعلان الواحد، فستُقسَّم على <b class="num">${splitGroups(chanTarget, 100).length}</b> مجموعات مرتبة من الأفضل تقييمًا، وكل نص وصورة يُنشأ مرة لكل مجموعة.` : ''}
+        <div class="sub" dir="ltr" style="text-align:right;max-height:84px;overflow:auto">${chanTarget.map(c => '@' + esc(c)).join(' ')}</div>
         <label class="check"><input type="radio" name="cMode" value="channels" checked> الإعلان يظهر داخل هذه القنوات</label>
         <label class="check"><input type="radio" name="cMode" value="users"> الإعلان يظهر لمشتركي هذه القنوات أينما كانوا، في:
           <select id="cCountry"><option value="">كل الدول</option><option value="EG">مصر</option><option value="SA">السعودية</option></select></label>
@@ -490,26 +491,28 @@ async function preview() {
   if (!($('#cCpm').value > 0)) return fail('حددي سعر الألف ظهور.');
   const n = Math.max(texts.length, files.length), prefix = $('#cPrefix').value.trim() || tpl.title;
   const checks = await Promise.all(files.map(checkImage));
-  plan = Array.from({length: n}, (_, i) => {
+  const groups = chanTarget.length ? splitGroups(chanTarget, 100) : [null];
+  plan = groups.flatMap((g, gi) => Array.from({length: n}, (_, i) => {
     const fi = files.length === 1 ? 0 : i;
-    return {title: `${prefix} ${i + 1}`, text: texts[texts.length === 1 ? 0 : i], file: files[fi] || null,
-            img: checks[fi] || null, key: crypto.randomUUID(), done: false};
-  });
+    return {title: groups.length > 1 ? `${prefix} م${gi + 1}-${i + 1}` : `${prefix} ${i + 1}`, text: texts[texts.length === 1 ? 0 : i],
+            file: files[fi] || null, img: checks[fi] || null, key: crypto.randomUUID(), done: false, channels: g};
+  }));
+  const total = plan.length;
   const cur = CUR[tpl.currency] || tpl.currency, budget = parseFloat($('#cBudget').value) || 0;
   const tooLong = plan.filter(x => [...x.text].length > 160).length;
   box.innerHTML = `
-    <h3 class="sec">المعاينة: ${n} إعلان</h3>
+    <h3 class="sec">المعاينة: ${total} إعلان${groups.length > 1 ? ` (${groups.length} مجموعات قنوات × ${n} إعلان لكل مجموعة)` : ''}</h3>
     <div class="scroll"><table class="slim"><thead><tr><th>الاسم</th><th>النص</th><th>الصورة</th><th>النتيجة</th></tr></thead><tbody>
     ${plan.map((x, i) => { const len = [...x.text].length; return `<tr>
-      <td>${esc(x.title)}</td>
+      <td>${esc(x.title)}${x.channels ? `<div class="sub"><span class="num">${x.channels.length}</span> قناة</div>` : ''}</td>
       <td dir="auto" style="max-width:420px">${esc(x.text)}<div class="${len > 160 ? 'warn' : 'sub'}"><span class="num">${len}</span> حرفًا${len > 160 ? '، أطول من المسموح' : ''}</div></td>
       <td>${x.file ? `${x.img.url ? `<img class="thumb" src="${x.img.url}" alt="">` : ''}<div class="sub">${esc(x.file.name)} <span class="num">${x.img.dims}</span></div>${x.img.warn ? `<div class="warn">${x.img.warn}</div>` : ''}`
             : `<span class="sub">${tpl.media ? 'وسائط الإعلان الأصلي' : 'بدون صورة'}</span>`}</td>
       <td id="res${i}"><span class="sub">لم يُنشأ بعد</span></td></tr>`; }).join('')}
     </tbody></table></div>
     <p class="sub">سعر الألف <span class="num">${fmt($('#cCpm').value)}</span> ${cur}، ميزانية كل إعلان <span class="num">${fmt(budget)}</span> ${cur}،
-      الإجمالي <b class="num">${fmt(budget * n)}</b> ${cur}، ${$('#cPaused').checked ? 'تُنشأ متوقفة' : 'تبدأ العمل فور قبول المراجعة'}.</p>
-    <button class="btn" id="cRun" ${tooLong ? 'disabled' : ''}>إنشاء ${n} إعلان</button>
+      الإجمالي <b class="num">${fmt(budget * total)}</b> ${cur}، ${$('#cPaused').checked ? 'تُنشأ متوقفة' : 'تبدأ العمل فور قبول المراجعة'}.</p>
+    <button class="btn" id="cRun" ${tooLong ? 'disabled' : ''}>إنشاء ${total} إعلان</button>
     ${tooLong ? '<span class="warn"> قصّري النصوص الطويلة ثم أعيدي المعاينة.</span>' : ''}`;
   if (!tooLong) $('#cRun').onclick = runCreate;
 }
@@ -529,7 +532,7 @@ async function runCreate() {
       budget, daily: $('#cDaily').value || 0, paused: $('#cPaused').checked ? '1' : '0'}).forEach(([k, v]) => fd.append(k, v));
     if (chanTarget.length) {
       fd.append('target_mode', document.querySelector('input[name=cMode]:checked').value);
-      fd.append('target_channels', JSON.stringify(chanTarget)); fd.append('target_country', $('#cCountry').value);
+      fd.append('target_channels', JSON.stringify(x.channels)); fd.append('target_country', $('#cCountry').value);
     }
     if (x.file) fd.append('photo', x.file);
     let r;
@@ -569,7 +572,7 @@ function renderChannels(busy) {
   rateChannels();
   const count = c => chk.filter(r => r.color === c).length;
   const order = {g: 0, y: 1, r: 2, x: 3};
-  const rows = [...chk].sort((a, b) => order[a.color] - order[b.color] || (b.ratio || 0) - (a.ratio || 0));
+  const rows = sortedChk();
   box.innerHTML = `
     <div class="bar2">
       <span>${busy || `خضراء <b class="num">${count('g')}</b>، صفراء <b class="num">${count('y')}</b>، حمراء <b class="num">${count('r')}</b>، لم تُفحص <b class="num">${count('x')}</b>`}</span>
@@ -591,43 +594,59 @@ function renderChannels(busy) {
     <div class="legend"><span>النسبة = وسيط مشاهدات المنشور ÷ عدد المشتركين. التقييم إشارة للترتيب وليس حكمًا قاطعًا، لأن المشاهدات نفسها يمكن تزويرها. القنوات غير المتاحة للإعلانات لا يمكن اختيارها.</span></div>`;
 }
 
+const sortedChk = () => { const o = {g: 0, y: 1, r: 2, x: 3}; return [...chk].sort((a, b) => o[a.color] - o[b.color] || (b.ratio || 0) - (a.ratio || 0)); };
+const splitGroups = (list, max) => { const g = Math.ceil(list.length / max), size = Math.ceil(list.length / g);
+  return Array.from({length: g}, (_, i) => list.slice(i * size, (i + 1) * size)); };
+let chkTimer = null;
+
 function showChannels() {
-  let savedNames = ''; try { savedNames = localStorage.getItem('chkNames') || ''; } catch {}
   $('#channels').innerHTML = `
     <button class="back" onclick="location.hash=''">رجوع لكل الإعلانات</button>
     <div class="dhead"><h2>فحص القنوات قبل الاستهداف</h2></div>
-    <p class="adtext">الصقي أسماء القنوات، اسم في كل سطر. يفحص البرنامج هل تقبل كل قناة الإعلانات، ويقرأ آخر منشوراتها العامة ليحسب نسبة المشاهدات للمشتركين.</p>
+    <p class="adtext">الصقي أسماء القنوات، اسم في كل سطر. الفحص يعمل على الخادم في الخلفية، فيمكنك إغلاق الصفحة والرجوع لاحقًا لتجدي النتائج.</p>
     <div class="form">
-      <label class="field"><span>أسماء القنوات (بحد أقصى 100)</span><textarea id="chkNames" dir="ltr" style="text-align:left">${esc(savedNames)}</textarea></label>
-      <div><button class="btn" id="chkRun">افحصي القنوات</button></div>
+      <label class="field"><span>أسماء القنوات (حتى 2000 قناة)</span><textarea id="chkNames" dir="ltr" style="text-align:left"></textarea></label>
+      <label class="check"><input type="checkbox" id="chkForce"> إعادة فحص الكل، حتى ما فُحص خلال آخر 24 ساعة</label>
+      <div class="row"><button class="btn" id="chkRun">افحصي القنوات</button><button class="btn ghost" id="chkStop" hidden>إيقاف الفحص</button></div>
     </div>
     <div id="chkOut"></div>`;
   $('#chkRun').onclick = runCheck;
+  $('#chkStop').onclick = () => fetch('/api/check_stop', POST);
   $('#chkOut').onclick = e => {
     const sel = e.target.dataset.sel;
-    if (sel != null) { chkPicked = new Set(chk.filter(r => r.ads_ok && sel.includes(r.color) && sel).map(r => r.name)); renderChannels(); }
-    if (e.target.closest('#chkGo') && chkPicked.size) { chanTarget = [...chkPicked]; location.hash = 'new'; }
+    if (sel != null) { chkPicked = new Set(chk.filter(r => r.ads_ok && sel && sel.includes(r.color)).map(r => r.name)); renderChannels(); }
+    if (e.target.closest('#chkGo') && chkPicked.size) { chanTarget = sortedChk().filter(r => chkPicked.has(r.name)).map(r => r.name); location.hash = 'new'; }
   };
   $('#chkOut').addEventListener('change', e => {
     const n = e.target.dataset.ch; if (!n) return;
     e.target.checked ? chkPicked.add(n) : chkPicked.delete(n); renderChannels();
   });
-  renderChannels();
+  pollCheck(true);
+}
+
+async function pollCheck(first) {
+  clearTimeout(chkTimer);
+  if (!location.hash.startsWith('#channels')) return;
+  let st;
+  try { st = await (await fetch('/api/check_status')).json(); } catch (e) { chkTimer = setTimeout(pollCheck, 5000); return; }
+  if (!$('#chkRun')) return;
+  if (first && !$('#chkNames').value) $('#chkNames').value = (st.names || []).join('\n');
+  chk = st.results.concat((st.invalid || []).map(n => ({name: n, error: 'اسم غير صالح'})));
+  const names = new Set(chk.map(r => r.name)); [...chkPicked].forEach(n => names.has(n) || chkPicked.delete(n));
+  $('#chkRun').disabled = st.running; $('#chkStop').hidden = !st.running;
+  renderChannels(st.running ? `جارٍ الفحص: <b class="num">${st.done}</b> من <b class="num">${st.total}</b>` : '');
+  if (st.running) chkTimer = setTimeout(pollCheck, 3000);
 }
 
 async function runCheck() {
-  const names = [...new Set($('#chkNames').value.split(/[\s,]+/).map(x => x.trim()).filter(Boolean))].slice(0, 100);
+  const names = [...new Set($('#chkNames').value.split(/[\s,]+/).map(x => x.trim()).filter(Boolean))];
   if (!names.length) return;
-  try { localStorage.setItem('chkNames', names.join('\n')); } catch {}
-  const btn = $('#chkRun'); btn.disabled = true; chk = []; chkPicked = new Set();
-  for (let i = 0; i < names.length; i++) {
-    let r;
-    try { r = await (await fetch('/api/check_channel', {...POST, headers: {...POST.headers, 'Content-Type': 'application/json'}, body: JSON.stringify({name: names[i]})})).json(); }
-    catch (e) { r = {name: names[i], error: 'انقطع الاتصال بالخادم'}; }
-    chk.push(r);
-    renderChannels(`جارٍ الفحص: <b class="num">${i + 1}</b> من <b class="num">${names.length}</b>`);
-  }
-  btn.disabled = false; renderChannels();
+  if (names.length > 2000 && !confirm(`القائمة ${names.length} اسمًا، وسيُفحص أول 2000 فقط. متابعة؟`)) return;
+  $('#chkRun').disabled = true; chkPicked = new Set();
+  const r = await (await fetch('/api/check_start', {...POST, headers: {...POST.headers, 'Content-Type': 'application/json'},
+    body: JSON.stringify({names, force: $('#chkForce').checked})})).json();
+  if (!r.ok) alert(r.error);
+  pollCheck();
 }
 
 function route() {
