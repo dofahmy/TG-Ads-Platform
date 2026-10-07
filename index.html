@@ -123,7 +123,7 @@ tr.best td{background:var(--good-bg)}
 <div class="wrap">
   <header class="top">
     <h1>إعلانات تيليجرام ساعة بساعة</h1>
-    <div class="sync"><a class="btn ghost" href="#channels">فحص القنوات</a><a class="btn" href="#new">إنشاء إعلانات بالجملة</a><span id="syncText">جارٍ التحميل</span><button class="btn ghost" id="syncBtn">حدّث الآن</button></div>
+    <div class="sync"><a class="btn ghost" href="#camp">الحملات</a><a class="btn ghost" href="#guard">الحارس</a><a class="btn ghost" href="#channels">فحص القنوات</a><a class="btn" href="#new">إنشاء إعلانات بالجملة</a><span id="syncText">جارٍ التحميل</span><button class="btn ghost" id="syncBtn">حدّث الآن</button></div>
   </header>
   <div id="notices"></div>
 
@@ -167,7 +167,9 @@ tr.best td{background:var(--good-bg)}
   <main id="detail" hidden></main>
   <main id="create" hidden></main>
   <main id="channels" hidden></main>
-  <p class="hint" style="margin-top:26px">نسخة الواجهة 7: فحص حتى 2000 قناة في الخلفية، وتقسيم القنوات المختارة على مجموعات من 100</p>
+  <main id="guard" hidden></main>
+  <main id="camp" hidden></main>
+  <p class="hint" style="margin-top:26px">نسخة الواجهة 9: الحملات التلقائية</p>
 </div>
 
 <script>
@@ -193,7 +195,7 @@ const POST = {method:'POST', headers:{'X-Requested-With':'dashboard'}};
 
 const COLS = [
   ['title','الإعلان'], ['status','الحالة'], ['views','مشاهدات'], ['clicks','نقرات'], ['ctr','نسبة النقر'],
-  ['actions','ليدز'], ['spent','المصروف'], ['cpl','تكلفة الليد'], [null,'ليدز آخر 24 ساعة'], ['cpm','سعر الألف']
+  ['actions','ليدز'], ['spent','المصروف'], ['cpl','تكلفة الليد'], ['real','ليدز باقية'], ['real_cpl','تكلفة الباقي'], [null,'ليدز آخر 24 ساعة'], ['cpm','سعر الألف']
 ];
 const val = (ad, k) => k === 'title' ? ad.title : k === 'status' ? ad.status : k === 'cpm' ? ad.cpm : ad.m[k];
 
@@ -216,6 +218,8 @@ function stripHtml(ad, ref) {
   }).join('') + '</div></div>';
 }
 
+// لو القناة متتبَّعة بالبوت فالحكم على الإعلان يكون بالليدز الباقية لا بكل الاشتراكات
+const effCpl = ad => ad.m.tracked ? ad.m.real_cpl : ad.m.cpl;
 function renderList() {
   if (!data) return;
   document.querySelectorAll('#period button').forEach(b => b.setAttribute('aria-pressed', b.dataset.p === view.period));
@@ -230,8 +234,8 @@ function renderList() {
     (!view.account || ad.account_id === view.account) &&
     (view.status ? ad.status === view.status : ad.status !== 'deleted') &&
     (!q || (ad.title || '').toLowerCase().includes(q)) &&
-    (isNaN(maxCpl) || (ad.m.cpl != null && ad.m.cpl <= maxCpl)) &&
-    (isNaN(minLeads) || ad.m.actions >= minLeads));
+    (isNaN(maxCpl) || (effCpl(ad) != null && effCpl(ad) <= maxCpl)) &&
+    (isNaN(minLeads) || (ad.m.tracked ? ad.m.real : ad.m.actions) >= minLeads));
 
   const tot = ads.reduce((t, ad) => (t.s += ad.m.spent, t.a += ad.m.actions, t.c += ad.m.clicks, t.v += ad.m.views, t), {s:0,a:0,c:0,v:0});
   const avg = tot.a ? tot.s / tot.a : null;
@@ -250,7 +254,7 @@ function renderList() {
   });
 
   shown = ads;
-  $('#head').innerHTML = `<th class="pick"><input type="checkbox" id="pickAll" aria-label="اختيار كل المعروض" ${ads.length && ads.every(a => picked.has(keyOf(a))) ? 'checked' : ''}></th>` + COLS.map(([k, label]) => k
+  $('#head').innerHTML = `<th class="pick"><input type="checkbox" id="pickAll" aria-label="اختيار كل المعروض" ${ads.length && ads.every(a => picked.has(keyOf(a))) ? 'checked' : ''}></th>` + COLS.filter(c => data.any_tracked || !['real', 'real_cpl'].includes(c[0])).map(([k, label]) => k
     ? `<th><button data-k="${k}" ${view.sort === k ? `data-dir="${view.dir}"` : ''}>${label}</button></th>`
     : `<th>ليدز ${esc(data.strip_label)} بالساعة</th>`).join('');
   $('#sum').innerHTML = `<span>الفترة<b>${esc(data.range_text)}</b></span><span>إعلانات<b>${int(ads.length)}</b></span><span>المصروف<b>${money(tot.s, cur)}</b></span>
@@ -269,6 +273,9 @@ function renderList() {
       <td>${int(ad.m.views)}</td><td>${int(ad.m.clicks)}</td><td>${pct(ad.m.ctr)}</td>
       <td><b>${int(ad.m.actions)}</b></td><td>${money(ad.m.spent, ad.currency)}</td>
       <td class="cpl ${cplClass(ad.m.cpl, ref)}">${money(ad.m.cpl, ad.currency)}</td>
+      ${!data.any_tracked ? '' : !ad.m.tracked ? '<td class="none">غير متتبَّعة</td><td class="none">لا يوجد</td>'
+        : `<td><b class="num">${ad.m.real}</b>${ad.m.leak ? ` <span class="${ad.m.leak >= 40 ? 'warn' : 'sub'}">خرج <span class="num">${ad.m.leak}%</span></span>` : ''}</td>
+           <td class="cpl ${cplClass(ad.m.real_cpl, ref)}">${money(ad.m.real_cpl, ad.currency)}</td>`}
       <td>${stripHtml(ad, ref24)}</td><td>${money(ad.cpm, ad.currency)}</td>
     </tr>`).join('')
     : `<tr><td colspan="${COLS.length + 1}" class="empty">${data.ads.length
@@ -579,6 +586,7 @@ function renderChannels(busy) {
       <button class="btn ghost" data-sel="g">اختيار الخضراء</button><button class="btn ghost" data-sel="gy">الخضراء والصفراء</button>
       <button class="btn ghost" data-sel="">إلغاء الاختيار</button>
       <button class="btn" id="chkGo" ${chkPicked.size ? '' : 'disabled'}>إنشاء إعلانات على <span class="num">${chkPicked.size}</span> قناة مختارة</button>
+      <button class="btn" id="chkCamp" ${chkPicked.size ? '' : 'disabled'}>حملة تلقائية على المختار</button>
     </div>
     <div class="scroll"><table class="slim" style="min-width:900px"><thead><tr><th class="pick"></th><th>القناة</th><th>التقييم</th><th>المشتركون</th>
       <th>وسيط المشاهدات</th><th>النسبة</th><th>تفاوت المشاهدات</th><th>تفاعل لكل ألف</th><th>منشورات يوميًا</th><th>الإعلانات</th></tr></thead><tbody>
@@ -615,6 +623,7 @@ function showChannels() {
   $('#chkOut').onclick = e => {
     const sel = e.target.dataset.sel;
     if (sel != null) { chkPicked = new Set(chk.filter(r => r.ads_ok && sel && sel.includes(r.color)).map(r => r.name)); renderChannels(); }
+    if (e.target.closest('#chkCamp') && chkPicked.size) { chanTarget = sortedChk().filter(r => chkPicked.has(r.name)).map(r => r.name); location.hash = 'camp'; }
     if (e.target.closest('#chkGo') && chkPicked.size) { chanTarget = sortedChk().filter(r => chkPicked.has(r.name)).map(r => r.name); location.hash = 'new'; }
   };
   $('#chkOut').addEventListener('change', e => {
@@ -649,14 +658,191 @@ async function runCheck() {
   pollCheck();
 }
 
+/* ---------- الحارس ---------- */
+const GSTATE = {suggested: ['اقتراح', 'y'], paused: ['أُوقف تلقائيًا', 'r'], applied: ['أُوقف بموافقتك', 'r'],
+  undone: ['تم التراجع', 'x'], dismissed: ['تم التجاهل', 'x'], failed: ['تعذر الإيقاف', 'r']};
+const GF = [
+  ['hours', 'يحكم على أداء آخر كم ساعة', 1], ['min_views', 'أقل مشاهدات قبل الحكم على التكلفة', 1],
+  ['spend_no_lead', 'إيقاف لو صرف هذا المبلغ بدون ليدز (0 = معطلة)', 0.0001],
+  ['target_cpl', 'تكلفة الليد المستهدفة (0 = معطلة)', 0.0001], ['tolerance', 'نسبة التجاوز المسموحة عن الهدف %', 1],
+  ['min_leads', 'أقل عدد ليدز قبل الحكم على التكلفة', 1],
+  ['ctr_max', 'نسبة النقر التي تُعد غير منطقية %', 1], ['ctr_views', 'بعد كم مشاهدة على الأقل', 1],
+  ['leak_max', 'نسبة الخروج السريع التي تُعد وهمية %', 1], ['leak_min_leads', 'بعد كم ليد على الأقل', 1]];
+
+async function showGuard() {
+  const g = await (await fetch('/api/guard')).json(), st = g.settings;
+  const when = ts => new Date(ts * 1000).toLocaleString('ar-EG', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+  $('#guard').innerHTML = `
+    <button class="back" onclick="location.hash=''">رجوع لكل الإعلانات</button>
+    <div class="dhead"><h2>الحارس</h2></div>
+    <p class="adtext">يراجع الإعلانات النشطة بعد كل سحب للبيانات، ويوقف أو يقترح إيقاف ما يخالف القواعد. لا يتكرر القرار على نفس الإعلان خلال 24 ساعة.</p>
+    ${g.guard_error ? `<div class="notice err">خطأ في آخر تشغيل للحارس: <span class="num">${esc(g.guard_error)}</span></div>` : ''}
+
+    <h3 class="sec">تتبع الاشتراك والخروج</h3>
+    ${!g.bot ? `<div class="notice demo">التتبع غير مفعّل. أنشئي بوتًا جديدًا مخصصًا لهذا البرنامج، وضعي رمزه في المتغير <span class="num">TRACK_BOT_TOKEN</span>، ثم أضيفيه مشرفًا في قنواتك. بدون التتبع يعمل الحارس على ليدز تيليجرام كما هي.</div>`
+      : g.track_error ? `<div class="notice err">البوت لا يستقبل التحديثات: <span class="num">${esc(g.track_error)}</span></div>` : ''}
+    ${g.chats.length ? `<div class="scroll"><table class="slim"><thead><tr><th>القناة</th><th>اشتراكات آخر 24 ساعة</th><th>خرجوا خلال <span class="num">${g.stay_minutes}</span> دقيقة</th><th>نسبة الخروج السريع</th></tr></thead><tbody>
+      ${g.chats.map(c => `<tr><td><b>${esc(c.title)}</b>${c.username ? `<div class="sub num">@${esc(c.username)}</div>` : '<div class="warn">قناة خاصة بدون اسم عام، لا يمكن ربطها بالإعلانات</div>'}</td>
+        <td>${int(c.joins)}</td><td>${int(c.quick)}</td><td>${c.joins ? `<span class="num ${c.quick / c.joins >= 0.4 ? 'warn' : ''}">${Math.round(c.quick / c.joins * 100)}%</span>` : '<span class="none">لا يوجد</span>'}</td></tr>`).join('')}
+      </tbody></table></div>` : (g.bot ? '<p class="sub">لم تصل أحداث من أي قناة بعد. أضيفي البوت مشرفًا في القناة وسيظهر هنا مع أول اشتراك.</p>' : '')}
+
+    <h3 class="sec">القواعد</h3>
+    <div class="form">
+      <div class="field"><span>طريقة العمل</span>
+        <div class="seg" id="gMode">${[['off', 'متوقف'], ['suggest', 'اقتراح فقط'], ['auto', 'إيقاف تلقائي']].map(([v, l]) =>
+          `<button data-v="${v}" aria-pressed="${st.mode === v}">${l}</button>`).join('')}</div></div>
+      <div class="row">${GF.map(([k, label, step]) => `<label class="field" style="flex:1 1 260px"><span>${label}</span>
+        <input type="number" id="g_${k}" min="0" step="${step}" value="${st[k]}" style="width:100%"></label>`).join('')}</div>
+      <div class="hint">المبالغ بعملة الحساب. لو القناة متتبَّعة بالبوت تُحسب القواعد على الليدز الباقية، وإلا على ليدز تيليجرام.
+        التنبيهات على تيليجرام ${g.notify ? 'مفعّلة' : 'غير مفعّلة (تحتاج المتغير NOTIFY_CHAT_ID)'}.</div>
+      <div><button class="btn" id="gSave">حفظ القواعد</button> <span class="okk" id="gSaved" hidden>تم الحفظ</span></div>
+    </div>
+
+    <h3 class="sec">سجل القرارات</h3>
+    ${g.log.length ? `<div class="scroll"><table class="slim"><thead><tr><th>الوقت</th><th>الإعلان</th><th>القاعدة</th><th>السبب</th><th>الحالة</th><th></th></tr></thead><tbody>
+      ${g.log.map(r => `<tr><td class="num">${when(r.ts)}</td><td><b>${esc(r.title)}</b></td><td>${esc(g.rules[r.rule] || r.rule)}</td>
+        <td style="max-width:340px">${esc(r.reason)}</td><td><span class="dot ${GSTATE[r.state][1]}">${GSTATE[r.state][0]}</span></td>
+        <td style="white-space:nowrap">${['suggested', 'failed'].includes(r.state) ? `<button class="btn" data-id="${r.id}" data-a="apply">أوقفيه</button> <button class="btn ghost" data-id="${r.id}" data-a="dismiss">تجاهل</button>`
+          : ['paused', 'applied'].includes(r.state) ? `<button class="btn ghost" data-id="${r.id}" data-a="undo">تراجع وشغّليه</button>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="sub">لا توجد قرارات بعد. أول مراجعة تتم مع السحب القادم للبيانات.</p>'}`;
+  let mode = st.mode;
+  $('#gMode').onclick = e => { const v = e.target.dataset.v; if (!v) return; mode = v;
+    document.querySelectorAll('#gMode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === v)); };
+  $('#gSave').onclick = async () => {
+    if (mode === 'auto' && st.mode !== 'auto' && !confirm('في الوضع التلقائي يوقف الحارس الإعلانات المخالفة بدون الرجوع إليك. متابعة؟')) return;
+    const body = {mode}; GF.forEach(([k]) => body[k] = $('#g_' + k).value);
+    await fetch('/api/guard_settings', J(body)); st.mode = mode; $('#gSaved').hidden = false;
+  };
+  $('#guard').onclick = async e => {
+    const b = e.target.closest('[data-a]'); if (!b) return;
+    b.disabled = true;
+    const r = await (await fetch('/api/guard_act', J({id: +b.dataset.id, action: b.dataset.a}))).json();
+    if (!r.ok) alert(r.error);
+    showGuard();
+  };
+}
+
+/* ---------- الحملات التلقائية ---------- */
+const CSTATE = {running: ['يجرّب ويحسّن', 'y'], stable: ['مستقرة: الهدف متحقق', 'g'], exhausted: ['انتهت التركيبات دون تحقيق الهدف', 'r'],
+  paused: ['متوقفة مؤقتًا', 'x'], ended: ['منتهية', 'x']};
+const ASTATE = {testing: ['تجريبي', 'y'], winner: ['ناجح', 'g'], stopped: ['متوقف', 'x']};
+const J = body => ({...POST, headers: {...POST.headers, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+
+async function showCamps() {
+  if (!data) { data = await (await fetch('/api/overview?period=' + view.period)).json(); renderMeta(); }
+  const d = await (await fetch('/api/camps')).json();
+  const many = data.accounts.length > 1;
+  const opts = data.ads.filter(a => a.status !== 'deleted').sort((a, b) => a.title.localeCompare(b.title, 'ar')).map(a =>
+    `<option value="${esc(a.account_id)}|${a.ad_id}" data-cpm="${a.cpm}" data-cur="${esc(a.currency)}">${esc(a.title)}${many ? ' — ' + esc(a.account_title) : ''}</option>`).join('');
+  const when = ts => new Date(ts * 1000).toLocaleString('ar-EG', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+  const card = c => {
+    const cur = c.currency, st = c.capped ? ['وصل حد اليوم، يعود غدًا', 'r'] : CSTATE[c.state] || [c.state, 'x'];
+    const live = ['running', 'stable', 'exhausted'].includes(c.state);
+    const order = {winner: 0, testing: 1, stopped: 2};
+    const ads = [...c.ads].sort((a, b) => order[a.state] - order[b.state] || (a.life.cpl ?? 9e9) - (b.life.cpl ?? 9e9));
+    const cplToday = c.today_leads > 0 ? c.today_spent / c.today_leads : null;
+    return `<h3 class="sec">${esc(c.name)} <span class="dot ${st[1]}">${st[0]}</span></h3>
+      <div class="kpis">
+        <div><b>${money(c.today_spent, cur)}</b>صرف اليوم من ${money(c.daily_budget, cur)}</div>
+        <div><b><span class="num">${c.today_leads}</span></b>ليدز اليوم، والهدف <span class="num">${c.target_leads}</span></div>
+        <div><b class="cpl ${cplClass(cplToday, c.target_cpl)}">${money(cplToday, cur)}</b>تكلفة ليد اليوم، والهدف ${money(c.target_cpl, cur)}</div>
+        <div><b><span class="num">${c.winners_leads24}</span></b>ليدز الناجحين آخر 24 ساعة</div>
+        <div><b><span class="num">${c.pool}</span></b>تركيبة لم تُجرَّب بعد</div>
+      </div>
+      <div class="bar2"><span class="sub"><span class="num">${c.creatives}</span> نص، <span class="num">${c.channels}</span> قناة في <span class="num">${c.groups}</span> مجموعة، سعر الألف ${money(c.cpm, cur)}</span>
+        ${live ? `<button class="btn ghost" data-c="${c.id}" data-a="pause">إيقاف مؤقت</button>` : ''}
+        ${c.state === 'paused' ? `<button class="btn" data-c="${c.id}" data-a="resume">استئناف</button>` : ''}
+        ${c.state !== 'ended' ? `<button class="btn ghost" data-c="${c.id}" data-a="stop">إنهاء الحملة</button>` : ''}</div>
+      ${ads.length ? `<div class="scroll"><table class="slim" style="min-width:900px"><thead><tr><th>الإعلان</th><th>الحالة</th><th>الحد اليومي</th><th>صرف اليوم</th><th>الصرف الكلي</th><th>ليدز</th><th>تكلفة الليد</th><th>السبب</th></tr></thead><tbody>
+        ${ads.map(a => `<tr><td style="max-width:300px"><b>${esc(a.title || 'لم يُنشأ')}</b><div class="sub" dir="auto">${esc(a.text)}</div>
+            <div class="sub">${a.has_photo ? 'بصورة' : 'نصي'}، مجموعة القنوات <span class="num">${a.group}</span></div></td>
+          <td><span class="dot ${ASTATE[a.state][1]}">${ASTATE[a.state][0]}</span>${a.state !== 'stopped' && a.status && a.status !== 'active' ? `<div class="sub">${STATUS[a.status] || esc(a.status)}</div>` : ''}</td>
+          <td>${money(a.daily_limit, cur)}</td><td>${money(a.day.spent, cur)}</td><td>${money(a.life.spent, cur)}</td>
+          <td><b class="num">${a.life.leads}</b>${a.tracked ? '<div class="sub">باقية</div>' : ''}</td>
+          <td class="cpl ${cplClass(a.life.cpl, c.target_cpl)}">${money(a.life.cpl, cur)}</td><td class="sub" style="max-width:240px">${esc(a.reason || '')}</td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="sub">لم تُنشأ إعلانات بعد، تبدأ مع السحب القادم للبيانات خلال دقائق.</p>'}
+      <details style="margin-top:8px"><summary class="sub" style="cursor:pointer">سجل الحملة</summary>
+        ${c.log.map(l => `<div class="sub"><span class="num">${when(l.ts)}</span> — ${esc(l.text)}</div>`).join('')}</details>`;
+  };
+  $('#camp').innerHTML = `
+    <button class="back" onclick="location.hash=''">رجوع لكل الإعلانات</button>
+    <div class="dhead"><h2>الحملات التلقائية</h2></div>
+    <p class="adtext">تحددين الهدف والمواد، والبرنامج ينشئ إعلانات تجريبية بحدود صغيرة، يوقف الضعيف ويكبّر الناجح ويجرّب البدائل حتى يتحقق الهدف، دون أن يتجاوز الحد اليومي.</p>
+    ${d.error ? `<div class="notice err">خطأ في آخر دورة للحملات: <span class="num">${esc(d.error)}</span></div>` : ''}
+    ${d.camps.map(card).join('')}
+    <h3 class="sec">حملة جديدة</h3>
+    <div class="form">
+      <label class="field"><span>اسم الحملة</span><input type="text" id="kName" maxlength="60"></label>
+      <label class="field"><span>إعلان موجود يُنسخ منه الرابط وباقي الإعدادات</span><select id="kTpl"><option value="">اختاري إعلانًا</option>${opts}</select></label>
+      <div class="row">
+        <label class="field"><span>هدف الليدز يوميًا</span><input type="number" id="kLeads" min="1" step="1"></label>
+        <label class="field"><span>أقصى صرف يومي (شامل التجارب)</span><input type="number" id="kBudget" min="0" step="0.01"></label>
+        <label class="field"><span>سعر الألف ظهور</span><input type="number" id="kCpm" min="0" step="0.01"></label>
+      </div>
+      <div class="setup" id="kCalc">أدخلي الهدف والحد اليومي لتظهر حدود التجارب.</div>
+      <label class="field"><span>النصوص: كل سطر نص إعلان (بحد أقصى 160 حرفًا)</span><textarea id="kTexts" dir="auto"></textarea></label>
+      <label class="field"><span>الصور (اختياري)</span><input type="file" id="kFiles" accept="image/jpeg,image/png" multiple></label>
+      <div class="hint">الصور تُرتَّب باسم الملف: الصورة الأولى مع النص الأول والثانية مع الثاني وهكذا. النصوص الزائدة عن عدد الصور تصبح إعلانات نصية فقط.</div>
+      <label class="field"><span>القنوات المستهدفة: اسم في كل سطر (تُقسَّم تلقائيًا على مجموعات من 100)</span>
+        <textarea id="kChans" dir="ltr" style="text-align:left;min-height:120px">${esc(chanTarget.join('\n'))}</textarea></label>
+      <label class="check"><input type="radio" name="kMode" value="channels" checked> الإعلان يظهر داخل هذه القنوات</label>
+      <label class="check"><input type="radio" name="kMode" value="users"> الإعلان يظهر لمشتركي هذه القنوات أينما كانوا، في:
+        <select id="kCountry"><option value="">كل الدول</option><option value="EG">مصر</option><option value="SA">السعودية</option></select></label>
+      <div><button class="btn" id="kGo">بدء الحملة</button> <span class="warn" id="kErr"></span></div>
+    </div>`;
+  const calc = () => {
+    const L = parseFloat($('#kLeads').value), B = parseFloat($('#kBudget').value);
+    const cur = CUR[($('#kTpl').selectedOptions[0] || {dataset: {}}).dataset.cur] || '';
+    $('#kCalc').innerHTML = L > 0 && B > 0 ? `تكلفة الليد المستهدفة <b class="num">${fmt(B / L)}</b> ${cur}. كل إعلان تجريبي حده اليومي <b class="num">${fmt(6 * B / L)}</b>،
+      ويتوقف لو صرف <b class="num">${fmt(3 * B / L)}</b> بدون ليدز. يُعد ناجحًا بعد 5 ليدز بتكلفة لا تتجاوز <b class="num">${fmt(1.2 * B / L)}</b>.
+      يعمل حتى <span class="num">${Math.min(10, Math.floor(L / 6))}</span> تجارب في نفس الوقت.` : 'أدخلي الهدف والحد اليومي لتظهر حدود التجارب.';
+  };
+  $('#kLeads').oninput = $('#kBudget').oninput = calc;
+  $('#kTpl').onchange = () => { const o = $('#kTpl').selectedOptions[0]; if (o && o.dataset.cpm) $('#kCpm').value = o.dataset.cpm; calc(); };
+  $('#kGo').onclick = async () => {
+    const texts = $('#kTexts').value.split('\n').map(x => x.trim()).filter(Boolean);
+    const chans = [...new Set($('#kChans').value.split(/[\s,]+/).map(x => x.trim()).filter(Boolean))];
+    const files = [...$('#kFiles').files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+    const err = m => { $('#kErr').textContent = m; };
+    if (!$('#kTpl').value) return err('اختاري الإعلان الذي تُنسخ إعداداته.');
+    if (!(parseFloat($('#kLeads').value) > 0 && parseFloat($('#kBudget').value) > 0 && parseFloat($('#kCpm').value) > 0)) return err('أدخلي الهدف والحد اليومي وسعر الألف.');
+    if (!texts.length || !chans.length) return err('النصوص والقنوات مطلوبة.');
+    if (texts.some(t => [...t].length > 160)) return err('يوجد نص أطول من 160 حرفًا.');
+    if (files.length > texts.length) return err('عدد الصور أكبر من عدد النصوص.');
+    const groups = Math.ceil(chans.length / 100);
+    if (!confirm(`ستبدأ حملة تصرف حتى ${fmt($('#kBudget').value)} يوميًا تلقائيًا: ${texts.length} نص (${files.length} منها بصورة) × ${groups} مجموعة قنوات = ${texts.length * groups} تركيبة للتجربة. متابعة؟`)) return;
+    const fd = new FormData();
+    Object.entries({name: $('#kName').value.trim() || 'حملة', template: $('#kTpl').value, target_leads: $('#kLeads').value,
+      daily_budget: $('#kBudget').value, cpm: $('#kCpm').value, mode: document.querySelector('input[name=kMode]:checked').value,
+      country: $('#kCountry').value, texts: JSON.stringify(texts), channels: JSON.stringify(chans)}).forEach(([k, v]) => fd.append(k, v));
+    files.forEach(f => fd.append('photos', f));
+    $('#kGo').disabled = true;
+    const r = await (await fetch('/api/camp_create', {...POST, body: fd})).json();
+    if (!r.ok) { $('#kGo').disabled = false; return err(r.error); }
+    chanTarget = []; showCamps(); window.scrollTo(0, 0);
+  };
+  $('#camp').onclick = async e => {
+    const b = e.target.closest('[data-c]'); if (!b) return;
+    const q = {pause: 'إيقاف كل إعلانات الحملة مؤقتًا؟', resume: 'استئناف الحملة؟', stop: 'إنهاء الحملة نهائيًا وإيقاف كل إعلاناتها؟'}[b.dataset.a];
+    if (!confirm(q)) return;
+    b.disabled = true;
+    const r = await (await fetch('/api/camp_act', J({id: +b.dataset.c, action: b.dataset.a}))).json();
+    if (!r.ok && r.error) alert(r.error);
+    showCamps();
+  };
+}
+
 function route() {
   const m = location.hash.match(/^#ad\/([^/]+)\/(\d+)(?:\/(\d{4}-\d\d-\d\d))?/);
   const c = location.hash.match(/^#new(?:\/([^/]+)\/(\d+))?/);
-  const k = location.hash.startsWith('#channels');
-  $('#list').hidden = !!(m || c || k); $('#detail').hidden = !m; $('#create').hidden = !c; $('#channels').hidden = !k;
+  const k = location.hash.startsWith('#channels'), gd = location.hash.startsWith('#guard'), cp = location.hash.startsWith('#camp');
+  $('#guard').hidden = !gd; $('#camp').hidden = !cp;
+  $('#list').hidden = !!(m || c || k || gd || cp); $('#detail').hidden = !m; $('#create').hidden = !c; $('#channels').hidden = !k;
   if (m) { loadDetail(decodeURIComponent(m[1]), m[2], m[3]); window.scrollTo(0, 0); }
   else if (c) { showCreate(c[1] ? decodeURIComponent(c[1]) : '', c[2]); window.scrollTo(0, 0); }
   else if (k) { showChannels(); window.scrollTo(0, 0); }
+  else if (gd) { showGuard(); window.scrollTo(0, 0); }
+  else if (cp) { showCamps(); window.scrollTo(0, 0); }
   else loadList();
 }
 
@@ -694,7 +880,7 @@ $('#syncBtn').onclick = async () => {
   setTimeout(route, 4000);
 };
 window.addEventListener('hashchange', route);
-setInterval(() => { if (!/^#(ad|new|channels)/.test(location.hash)) loadList(); }, 60000);
+setInterval(() => { if (!/^#(ad|new|channels|guard|camp)/.test(location.hash)) loadList(); }, 60000);
 route();
 </script>
 </body>
