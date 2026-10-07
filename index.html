@@ -47,6 +47,10 @@ tr.row.sel{background:var(--petrol-soft)}
 #bulk .btn.danger{background:var(--bad);color:#fff;border-color:var(--bad)}
 #bulk .btn.link{background:transparent;color:#fff;border-color:transparent;text-decoration:underline}
 .notice.ok{background:var(--good-bg);color:var(--good)}
+.dot{display:inline-block;font-size:12.5px;padding:1px 10px;border-radius:99px;white-space:nowrap;font-weight:600}
+.dot.g{background:var(--good-bg);color:var(--good)} .dot.y{background:var(--mid-bg);color:#6A4A05}
+.dot.r{background:var(--bad-bg);color:var(--bad)} .dot.x{background:var(--empty);color:var(--muted)}
+.bar2{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0 10px}
 .notice{border-radius:6px;padding:9px 14px;margin-bottom:12px;font-size:14px}
 .notice.demo{background:var(--mid-bg);color:#6A4A05}
 .notice.err{background:var(--bad-bg);color:var(--bad)}
@@ -119,7 +123,7 @@ tr.best td{background:var(--good-bg)}
 <div class="wrap">
   <header class="top">
     <h1>إعلانات تيليجرام ساعة بساعة</h1>
-    <div class="sync"><a class="btn" href="#new">إنشاء إعلانات بالجملة</a><span id="syncText">جارٍ التحميل</span><button class="btn ghost" id="syncBtn">حدّث الآن</button></div>
+    <div class="sync"><a class="btn ghost" href="#channels">فحص القنوات</a><a class="btn" href="#new">إنشاء إعلانات بالجملة</a><span id="syncText">جارٍ التحميل</span><button class="btn ghost" id="syncBtn">حدّث الآن</button></div>
   </header>
   <div id="notices"></div>
 
@@ -161,8 +165,9 @@ tr.best td{background:var(--good-bg)}
   </main>
 
   <main id="detail" hidden></main>
-  <p class="hint" style="margin-top:26px">نسخة الواجهة 5: اختيار الإعلانات بالخانات مع إيقاف وتشغيل وحذف مجمع</p>
   <main id="create" hidden></main>
+  <main id="channels" hidden></main>
+  <p class="hint" style="margin-top:26px">نسخة الواجهة 6: فحص القنوات، واختيار الإعلانات بالخانات مع إيقاف وتشغيل وحذف مجمع</p>
 </div>
 
 <script>
@@ -401,6 +406,7 @@ async function loadDetail(acc, id, day) {
 
 /* ---------- إنشاء إعلانات بالجملة ---------- */
 let tpl = null, plan = [];
+let chanTarget = [], chk = [], chkPicked = new Set();
 const PLACE_NOTE = 'الصور متاحة فقط مع استهداف القنوات أو المستخدمين، والإعلان بصورة يحتاج سعر ألف أعلى بنحو 50 إلى 80%.';
 
 async function showCreate(acc, id) {
@@ -415,6 +421,12 @@ async function showCreate(acc, id) {
     <div class="form">
       <label class="field"><span>الإعلان الذي تُنسخ إعداداته</span><select id="cTpl"><option value="">اختاري إعلانًا</option>${opts}</select></label>
       <div class="setup" id="cInfo" hidden></div>
+      ${chanTarget.length ? `<div class="setup" id="cTarget"><b>الاستهداف: <span class="num">${chanTarget.length}</span> قناة مختارة من فحص القنوات</b> (بدل استهداف الإعلان الأصلي)
+        <div class="sub" dir="ltr" style="text-align:right">${chanTarget.map(c => '@' + esc(c)).join(' ')}</div>
+        <label class="check"><input type="radio" name="cMode" value="channels" checked> الإعلان يظهر داخل هذه القنوات</label>
+        <label class="check"><input type="radio" name="cMode" value="users"> الإعلان يظهر لمشتركي هذه القنوات أينما كانوا، في:
+          <select id="cCountry"><option value="">كل الدول</option><option value="EG">مصر</option><option value="SA">السعودية</option></select></label>
+        <button class="back" style="margin:0" id="cDrop">إلغاء، واستخدام استهداف الإعلان الأصلي</button></div>` : ''}
       <label class="field"><span>اسم الإعلانات (يُضاف له رقم لكل إعلان، ويظهر لكِ فقط)</span><input type="text" id="cPrefix" maxlength="100"></label>
       <label class="field"><span>النصوص: كل سطر نص إعلان مستقل، بحد أقصى 160 حرفًا</span><textarea id="cTexts" dir="auto"></textarea></label>
       <label class="field"><span>الصور (اختياري): تُرتَّب باسم الملف، فالصورة الأولى مع النص الأول وهكذا</span>
@@ -430,6 +442,7 @@ async function showCreate(acc, id) {
       <div><button class="btn" id="cPreview" disabled>معاينة قبل الإنشاء</button></div>
     </div>
     <div id="cPlan"></div>`;
+  if ($('#cDrop')) $('#cDrop').onclick = () => { chanTarget = []; showCreate(acc, id); };
   $('#cTpl').onchange = loadTpl;
   $('#cPreview').onclick = preview;
   if ($('#cTpl').value) loadTpl();
@@ -514,6 +527,10 @@ async function runCreate() {
     const fd = new FormData();
     Object.entries({account: tpl.acc, template: tpl.id, key: x.key, title: x.title, text: x.text, cpm: $('#cCpm').value,
       budget, daily: $('#cDaily').value || 0, paused: $('#cPaused').checked ? '1' : '0'}).forEach(([k, v]) => fd.append(k, v));
+    if (chanTarget.length) {
+      fd.append('target_mode', document.querySelector('input[name=cMode]:checked').value);
+      fd.append('target_channels', JSON.stringify(chanTarget)); fd.append('target_country', $('#cCountry').value);
+    }
     if (x.file) fd.append('photo', x.file);
     let r;
     try { r = await (await fetch('/api/create_ad', {...POST, body: fd})).json(); }
@@ -526,12 +543,101 @@ async function runCreate() {
   data = null;
 }
 
+/* ---------- فحص القنوات ---------- */
+function rateChannels() {
+  const ratios = chk.filter(r => r.ratio != null).map(r => r.ratio).sort((a, b) => a - b);
+  const med = ratios.length >= 4 ? ratios[Math.floor(ratios.length / 2)] : null;
+  chk.forEach(r => {
+    const why = []; let c = 'g';
+    const worse = x => { if (x === 'r' || c === 'g') c = x; };
+    if (r.error) { r.color = 'x'; r.why = [r.error]; return; }
+    if (!r.preview_ok || r.ratio == null) { r.color = 'x'; r.why = ['تعذرت قراءة منشورات القناة']; return; }
+    if (r.ratio < 1) { worse('r'); why.push('المشاهدات أقل من 1% من المشتركين'); }
+    else if (med && r.ratio < Math.max(2, med * 0.35)) { worse('y'); why.push('المشاهدات أقل بوضوح من باقي القنوات'); }
+    if (r.ratio > 150) { worse('y'); why.push('المشاهدات أكبر كثيرًا من عدد المشتركين'); }
+    if (r.cv != null && r.cv < 0.08) { worse('y'); why.push('مشاهدات المنشورات شبه متطابقة'); }
+    if (r.basis !== '12h') why.push('محسوبة على منشورات حديثة، فالرقم أقل من الحقيقي');
+    r.color = c; r.why = why;
+  });
+}
+const COLOR = {g: 'خضراء', y: 'صفراء', r: 'حمراء', x: 'لم تُفحص'};
+const val1 = (x, suffix = '') => x == null ? '<span class="none">لا يوجد</span>' : `<span class="num">${x}${suffix}</span>`;
+
+function renderChannels(busy) {
+  const box = $('#chkOut'); if (!box) return;
+  if (!chk.length) { box.innerHTML = ''; return; }
+  rateChannels();
+  const count = c => chk.filter(r => r.color === c).length;
+  const order = {g: 0, y: 1, r: 2, x: 3};
+  const rows = [...chk].sort((a, b) => order[a.color] - order[b.color] || (b.ratio || 0) - (a.ratio || 0));
+  box.innerHTML = `
+    <div class="bar2">
+      <span>${busy || `خضراء <b class="num">${count('g')}</b>، صفراء <b class="num">${count('y')}</b>، حمراء <b class="num">${count('r')}</b>، لم تُفحص <b class="num">${count('x')}</b>`}</span>
+      <button class="btn ghost" data-sel="g">اختيار الخضراء</button><button class="btn ghost" data-sel="gy">الخضراء والصفراء</button>
+      <button class="btn ghost" data-sel="">إلغاء الاختيار</button>
+      <button class="btn" id="chkGo" ${chkPicked.size ? '' : 'disabled'}>إنشاء إعلانات على <span class="num">${chkPicked.size}</span> قناة مختارة</button>
+    </div>
+    <div class="scroll"><table class="slim" style="min-width:900px"><thead><tr><th class="pick"></th><th>القناة</th><th>التقييم</th><th>المشتركون</th>
+      <th>وسيط المشاهدات</th><th>النسبة</th><th>تفاوت المشاهدات</th><th>تفاعل لكل ألف</th><th>منشورات يوميًا</th><th>الإعلانات</th></tr></thead><tbody>
+    ${rows.map(r => `<tr class="${chkPicked.has(r.name) ? 'row sel' : ''}">
+      <td class="pick"><input type="checkbox" data-ch="${esc(r.name)}" ${chkPicked.has(r.name) ? 'checked' : ''} ${r.ads_ok ? '' : 'disabled'} aria-label="اختيار القناة"></td>
+      <td><b>${esc(r.title || r.name)}</b><div class="sub num">@${esc(r.name)}</div></td>
+      <td><span class="dot ${r.color}">${COLOR[r.color]}</span>${r.why.length ? `<div class="sub" style="max-width:260px">${r.why.map(esc).join('، ')}</div>` : ''}</td>
+      <td>${r.subs != null ? int(r.subs) : val1(null)}${r.first_subs && r.first_day && r.first_subs !== r.subs ? `<div class="sub">كان <span class="num">${nf.format(r.first_subs)}</span> في <span class="num">${r.first_day}</span></div>` : ''}</td>
+      <td>${r.median_views != null ? int(r.median_views) : val1(null)}</td><td>${val1(r.ratio, '%')}</td>
+      <td>${val1(r.cv == null ? null : Math.round(r.cv * 100), '%')}</td><td>${val1(r.reacts_per_1000)}</td><td>${val1(r.posts_per_day)}</td>
+      <td>${r.ads_ok ? '<span class="okk">متاحة</span>' : `<span class="warn">غير متاحة${r.ads_error ? `<br><span class="num">${esc(r.ads_error)}</span>` : ''}</span>`}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="legend"><span>النسبة = وسيط مشاهدات المنشور ÷ عدد المشتركين. التقييم إشارة للترتيب وليس حكمًا قاطعًا، لأن المشاهدات نفسها يمكن تزويرها. القنوات غير المتاحة للإعلانات لا يمكن اختيارها.</span></div>`;
+}
+
+function showChannels() {
+  let savedNames = ''; try { savedNames = localStorage.getItem('chkNames') || ''; } catch {}
+  $('#channels').innerHTML = `
+    <button class="back" onclick="location.hash=''">رجوع لكل الإعلانات</button>
+    <div class="dhead"><h2>فحص القنوات قبل الاستهداف</h2></div>
+    <p class="adtext">الصقي أسماء القنوات، اسم في كل سطر. يفحص البرنامج هل تقبل كل قناة الإعلانات، ويقرأ آخر منشوراتها العامة ليحسب نسبة المشاهدات للمشتركين.</p>
+    <div class="form">
+      <label class="field"><span>أسماء القنوات (بحد أقصى 100)</span><textarea id="chkNames" dir="ltr" style="text-align:left">${esc(savedNames)}</textarea></label>
+      <div><button class="btn" id="chkRun">افحصي القنوات</button></div>
+    </div>
+    <div id="chkOut"></div>`;
+  $('#chkRun').onclick = runCheck;
+  $('#chkOut').onclick = e => {
+    const sel = e.target.dataset.sel;
+    if (sel != null) { chkPicked = new Set(chk.filter(r => r.ads_ok && sel.includes(r.color) && sel).map(r => r.name)); renderChannels(); }
+    if (e.target.closest('#chkGo') && chkPicked.size) { chanTarget = [...chkPicked]; location.hash = 'new'; }
+  };
+  $('#chkOut').addEventListener('change', e => {
+    const n = e.target.dataset.ch; if (!n) return;
+    e.target.checked ? chkPicked.add(n) : chkPicked.delete(n); renderChannels();
+  });
+  renderChannels();
+}
+
+async function runCheck() {
+  const names = [...new Set($('#chkNames').value.split(/[\s,]+/).map(x => x.trim()).filter(Boolean))].slice(0, 100);
+  if (!names.length) return;
+  try { localStorage.setItem('chkNames', names.join('\n')); } catch {}
+  const btn = $('#chkRun'); btn.disabled = true; chk = []; chkPicked = new Set();
+  for (let i = 0; i < names.length; i++) {
+    let r;
+    try { r = await (await fetch('/api/check_channel', {...POST, headers: {...POST.headers, 'Content-Type': 'application/json'}, body: JSON.stringify({name: names[i]})})).json(); }
+    catch (e) { r = {name: names[i], error: 'انقطع الاتصال بالخادم'}; }
+    chk.push(r);
+    renderChannels(`جارٍ الفحص: <b class="num">${i + 1}</b> من <b class="num">${names.length}</b>`);
+  }
+  btn.disabled = false; renderChannels();
+}
+
 function route() {
   const m = location.hash.match(/^#ad\/([^/]+)\/(\d+)(?:\/(\d{4}-\d\d-\d\d))?/);
   const c = location.hash.match(/^#new(?:\/([^/]+)\/(\d+))?/);
-  $('#list').hidden = !!(m || c); $('#detail').hidden = !m; $('#create').hidden = !c;
+  const k = location.hash.startsWith('#channels');
+  $('#list').hidden = !!(m || c || k); $('#detail').hidden = !m; $('#create').hidden = !c; $('#channels').hidden = !k;
   if (m) { loadDetail(decodeURIComponent(m[1]), m[2], m[3]); window.scrollTo(0, 0); }
   else if (c) { showCreate(c[1] ? decodeURIComponent(c[1]) : '', c[2]); window.scrollTo(0, 0); }
+  else if (k) { showChannels(); window.scrollTo(0, 0); }
   else loadList();
 }
 
@@ -569,7 +675,7 @@ $('#syncBtn').onclick = async () => {
   setTimeout(route, 4000);
 };
 window.addEventListener('hashchange', route);
-setInterval(() => { if (!/^#(ad|new)/.test(location.hash)) loadList(); }, 60000);
+setInterval(() => { if (!/^#(ad|new|channels)/.test(location.hash)) loadList(); }, 60000);
 route();
 </script>
 </body>

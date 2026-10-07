@@ -18,6 +18,9 @@
     PORT            الافتراضي 8000
 """
 import hmac
+import json
+import re
+import statistics
 import math
 import os
 import random
@@ -154,6 +157,11 @@ class DemoAds:
                 if b:
                     out.append(b)
             return out
+        if method == "getTargetChannel":
+            name = str(p["channel_id"]).lstrip("@")
+            if "group" in name.lower():
+                raise ApiError("CHANNEL_INVALID")
+            return {"channel_id": abs(hash(name)) % 10**9, "title": "قناة " + name, "username": name}
         if method == "getAdsById":
             ad = next((a for a in self.call("getAdsList")["ads"] if a["ad_id"] in p["ad_ids"]), None)
             if ad:
@@ -226,6 +234,8 @@ def init_db():
             clicks INTEGER, actions INTEGER, spent REAL,
             PRIMARY KEY(account_id, ad_id, t)) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS channel_snap(
+            username TEXT, day TEXT, subs INTEGER, PRIMARY KEY(username, day));
         CREATE TABLE IF NOT EXISTS pending_deletes(
             account_id TEXT, ad_id INTEGER, due INTEGER, tries INTEGER, error TEXT,
             PRIMARY KEY(account_id, ad_id));
@@ -621,6 +631,18 @@ def create_ad():
         tpl = fetch_template(acc_id, int(f["template"]))
         params = {k: tpl[k] for k in COPY_FIELDS if tpl.get(k) not in (None, "", 0, False)}
         params["target"] = input_target(tpl.get("target") or {})
+        mode = f.get("target_mode")
+        if mode in ("channels", "users"):  # استهداف بقنوات مختارة من صفحة الفحص بدل استهداف الإعلان الأصلي
+            chans = ["@" + str(c).lstrip("@") for c in json.loads(f.get("target_channels") or "[]")][:100]
+            if not chans:
+                raise ValueError("لا توجد قنوات مختارة")
+            if mode == "channels":
+                params["target"] = {"type": "channels", "channel_ids": chans}
+            else:
+                country = (f.get("target_country") or "").upper()
+                params["target"] = {"type": "users", "country_codes": [country] if country else [],
+                                    "channel_ids": chans}
+            params.pop("placement", None)  # يحدده تيليجرام من نوع الاستهداف
         if (tpl.get("website_photo") or {}).get("photo_id"):
             params["website_photo_id"] = tpl["website_photo"]["photo_id"]
         params.update(title=f["title"], text=f["text"], cpm=float(f["cpm"]),
@@ -644,6 +666,126 @@ def create_ad():
         return jsonify({"ok": False, "error": str(e)})
     except (KeyError, ValueError) as e:
         return jsonify({"ok": False, "error": f"بيانات ناقصة أو غير صحيحة: {e}"})
+
+
+# ---------------------------------------------------------------- فحص القنوات قبل الاستهداف
+def parse_num(text):
+    m = re.search(r"(\d[\d.,]*)\s*([KkMm]?)", text or "")
+    if not m:
+        return None
+    try:
+        v = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    return int(v * {"k": 1e3, "m": 1e6}.get(m.group(2).lower(), 1))
+
+
+def parse_preview(html):
+    """يقرأ صفحة المعاينة العامة للقناة: عدد المشتركين والمنشورات بمشاهداتها وتفاعلاتها."""
+    subs = None
+    m = re.search(r'counter_value">([^<]+)</span>\s*<span class="counter_type">\s*(?:subscriber|member)', html)
+    if m:
+        subs = parse_num(m.group(1))
+    t = re.search(r'tgme_channel_info_header_title[^>]*>(.*?)</div>', html, re.S)
+    title = re.sub(r"<[^>]+>", "", t.group(1)).strip() if t else ""
+    posts = []
+    for block in html.split("tgme_widget_message_wrap")[1:]:
+        mid = re.search(r'data-post="[^"/]+/(\d+)"', block)
+        mv = re.search(r'tgme_widget_message_views">([^<]+)<', block)
+        mt = re.search(r'tgme_widget_message_date"[^>]*>\s*<time[^>]*datetime="([^"]+)"', block)
+        if not (mid and mv and mt):
+            continue
+        views = parse_num(mv.group(1))
+        try:
+            ts = datetime.fromisoformat(mt.group(1)).timestamp()
+        except ValueError:
+            continue
+        reacts = 0
+        for part in block.split('class="tgme_reaction')[1:]:
+            reacts += parse_num(re.sub(r"<[^>]+>", " ", part[:500])) or 0
+        if views is not None:
+            posts.append({"id": int(mid.group(1)), "t": ts, "views": views, "reacts": reacts})
+    return subs, title, posts
+
+
+def fetch_preview(name):
+    posts, subs, title, before = {}, None, "", None
+    for _ in range(3):  # حتى ثلاث صفحات للوصول لمنشورات مرّ عليها وقت كافٍ
+        r = requests.get(f"https://t.me/s/{name}", params={"before": before} if before else None, timeout=15,
+                         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"})
+        if r.status_code != 200 or "tgme_widget_message" not in r.text:
+            break
+        s, t, found = parse_preview(r.text)
+        subs, title = subs or s, title or t
+        new = [x for x in found if x["id"] not in posts]
+        posts.update({x["id"]: x for x in new})
+        if not new or len(posts) >= 60 or time.time() - min(x["t"] for x in posts.values()) > 36 * 3600:
+            break
+        before = min(posts)
+        time.sleep(0.4)
+    return subs, title, list(posts.values())
+
+
+def demo_preview(name):
+    rnd = random.Random(name)
+    subs = rnd.choice([3200, 8700, 15400, 42000, 120000])
+    kind = rnd.random()
+    base = subs * (0.004 if kind < 0.15 else 0.02 if kind < 0.3 else rnd.uniform(0.06, 0.2))
+    now = time.time()
+    posts = [{"id": i, "t": now - i * 2400, "reacts": int(rnd.uniform(0, 6)),
+              "views": int(base * (1 if kind > 0.9 else rnd.uniform(0.6, 1.4)))} for i in range(1, 50)]
+    return subs, "قناة " + name, posts
+
+
+def channel_metrics(subs, posts):
+    now = time.time()
+    basis, sample = "12h", [x for x in posts if now - x["t"] >= 12 * 3600]
+    if len(sample) < 5:
+        basis, sample = "2h", [x for x in posts if now - x["t"] >= 2 * 3600]
+    if len(sample) < 3:
+        basis, sample = "all", posts
+    views = [x["views"] for x in sample]
+    if not views:
+        return {}
+    mean = statistics.mean(views)
+    med = statistics.median(views)
+    span = max(x["t"] for x in posts) - min(x["t"] for x in posts)
+    return {"median_views": int(med), "sample": len(sample), "basis": basis,
+            "ratio": round(med / subs * 100, 2) if subs else None,
+            "cv": round(statistics.pstdev(views) / mean, 3) if len(views) >= 5 and mean else None,
+            "reacts_per_1000": round(sum(x["reacts"] for x in sample) / sum(views) * 1000, 2) if sum(views) else None,
+            "posts_per_day": round((len(posts) - 1) / (span / 86400), 1) if span > 3600 else None}
+
+
+@app.post("/api/check_channel")
+def check_channel():
+    raw = str((request.get_json(silent=True) or {}).get("name", "")).strip()
+    name = re.sub(r"^(https?://)?(t\.me/|telegram\.me/)(s/)?", "", raw).lstrip("@").split("/")[0].split("?")[0]
+    if not re.fullmatch(r"[A-Za-z0-9_]{4,32}", name):
+        return jsonify({"name": raw, "error": "اسم غير صالح"})
+    out = {"name": name, "title": "", "ads_ok": False, "ads_error": "", "preview_ok": False}
+    try:
+        ch = client.call("getTargetChannel", channel_id="@" + name) or {}
+        out.update(ads_ok=True, title=ch.get("title", ""))
+    except ApiError as e:
+        out["ads_error"] = str(e)
+    try:
+        subs, title, posts = demo_preview(name) if DEMO else fetch_preview(name)
+        out["title"] = out["title"] or title
+        out["subs"] = subs
+        if posts:
+            out.update(channel_metrics(subs, posts), preview_ok=True)
+        if subs:
+            with db() as con:  # لقطة يومية لعدد المشتركين، ليظهر النمو مع تكرار الفحص
+                con.execute("INSERT OR REPLACE INTO channel_snap VALUES(?,?,?)",
+                            (name.lower(), today().isoformat(), subs))
+                first = con.execute("SELECT day, subs FROM channel_snap WHERE username=? ORDER BY day LIMIT 1",
+                                    (name.lower(),)).fetchone()
+            out.update(first_day=first["day"], first_subs=first["subs"])
+    except requests.RequestException as e:
+        out["preview_error"] = str(e)
+    return jsonify(out)
 
 
 @app.post("/api/bulk")
